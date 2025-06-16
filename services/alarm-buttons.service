@@ -1,0 +1,17 @@
+[Unit]
+Description=Alarm Clock USB Button Handler
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/monty-alarm
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/pi/monty-alarm/scripts/button-service-wrapper.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

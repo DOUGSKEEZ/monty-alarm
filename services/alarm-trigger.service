@@ -1,0 +1,23 @@
+[Unit]
+Description=Monty Alarm Clock Trigger
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=audio
+WorkingDirectory=/home/pi/monty-alarm
+ExecStart=/usr/bin/python3 /home/pi/monty-alarm/core/alarm_trigger.py
+Restart=always
+RestartSec=10
+
+# Environment
+Environment="PULSE_RUNTIME_PATH=/run/user/1000/pulse"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

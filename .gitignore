@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Config files (auto-generated, may contain personal data)
+config/
+alarm_state.json
+wakeup_config.json
+
+# Signal files (runtime communication)
+signals/*
+!signals/.gitkeep
+
+# Backup directories
+backup_*/
+
+# System files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Test outputs
+test_alarm_time.json
