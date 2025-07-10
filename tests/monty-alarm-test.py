@@ -1,138 +1,109 @@
 #!/usr/bin/env python3
 """
-Alarm check script for testing - uses localhost mock server
-Based on the optimized version
+Quick test script to check alarm status from real Monty server with proper timezone handling
 """
-import socket
+
+import requests
 import json
-from datetime import datetime
-import time
-import sys
+from datetime import datetime, timezone
 
-# Use localhost for testing
-MONTY_HOST = "localhost"
-MONTY_PORT = 3001
-
-def get_wake_time_socket():
-    """Ultra-fast socket-based implementation"""
+def check_alarm_from_push_notification():
+    """Check alarm from local push notification state (fastest)"""
     try:
-        # Create socket with aggressive timeout
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1.0)
-        
-        # Connect
-        sock.connect((MONTY_HOST, MONTY_PORT))
-        
-        # Send minimal HTTP request
-        request = (
-            "GET /api/scheduler/wake-up/status HTTP/1.0\r\n"
-            f"Host: {MONTY_HOST}\r\n"
-            "\r\n"
-        ).encode()
-        sock.sendall(request)
-        
-        # Read response
-        response = b""
-        sock.settimeout(0.3)
-        
-        while True:
-            try:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    break
-                response += chunk
-                if b"}" in response and b"\r\n\r\n" in response:
-                    break
-            except socket.timeout:
-                break
-        
-        sock.close()
-        
-        # Parse response
-        if b"\r\n\r\n" in response:
-            header, body = response.split(b"\r\n\r\n", 1)
-            if b"200 OK" in header and body:
-                start = body.find(b"{")
-                end = body.rfind(b"}") + 1
-                if start >= 0 and end > start:
-                    json_str = body[start:end]
-                    data = json.loads(json_str)
-                    
-                    # Check both possible fields for next wake up
-                    wake_str = data.get('data', {}).get('nextWakeUp')
-                    if not wake_str:
-                        # Fallback for real Monty format
-                        wake_str = data.get('nextWakeUp')
-                    
-                    if wake_str:
-                        wake_time = datetime.fromisoformat(wake_str.replace('Z', '+00:00'))
-                        return wake_time
-        
-        return None
-        
-    except Exception as e:
-        if "--debug" in sys.argv:
-            print(f"Error: {e}")
-        return None
-
-def format_time_for_display(wake_time):
-    """Format time for display"""
-    if wake_time:
-        local_time = wake_time.replace(tzinfo=None)
-        hour = local_time.hour
-        minute = local_time.minute
-        
-        # Convert to 12-hour format
-        if hour == 0:
-            hour = 12
-        elif hour > 12:
-            hour -= 12
+        with open('/home/pi/monty-alarm/alarm_state.json', 'r') as f:
+            state = json.load(f)
             
-        return f"{hour}:{minute:02d}"
-    else:
-        return "NONE"
+        if state.get('hasAlarm'):
+            wake_time = state.get('wakeUpTime', 'Unknown')
+            next_alarm = state.get('nextAlarm', '')
+            
+            if next_alarm:
+                # Parse the next alarm time with proper timezone handling
+                try:
+                    if next_alarm.endswith('Z'):
+                        # UTC time - convert to local
+                        alarm_dt = datetime.fromisoformat(next_alarm.replace('Z', '+00:00'))
+                        # Convert UTC to local time
+                        alarm_dt = alarm_dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+                    else:
+                        # Already local time
+                        alarm_dt = datetime.fromisoformat(next_alarm)
+                    
+                    # Calculate time until alarm
+                    now = datetime.now()
+                    time_until = alarm_dt - now
+                    
+                    if time_until.days < 0:
+                        return f"Alarm was set for {wake_time} (MISSED - {-time_until.days} days ago)"
+                    elif time_until.total_seconds() < 0:
+                        return f"Alarm was set for {wake_time} (MISSED - {int(-time_until.total_seconds())}s ago)"
+                    else:
+                        hours = int(time_until.total_seconds() // 3600)
+                        minutes = int((time_until.total_seconds() % 3600) // 60)
+                        local_time = alarm_dt.strftime('%H:%M')
+                        return f"Alarm set for {wake_time} at {local_time} local (in {hours}h {minutes}m)"
+                except Exception as e:
+                    return f"Alarm set for {wake_time} (timezone parse error: {e})"
+            else:
+                return f"Alarm set for {wake_time}"
+        else:
+            return "No alarm set (from push notification)"
+            
+    except FileNotFoundError:
+        return "No push notification state found"
+    except Exception as e:
+        return f"Error reading push state: {e}"
 
-def check_alarm_once():
-    """Check alarm time once"""
-    start = time.time()
-    
-    wake_time = get_wake_time_socket()
-    display_text = format_time_for_display(wake_time)
-    
-    elapsed = time.time() - start
-    
-    if wake_time:
-        print(f"✓ {display_text}")
-    else:
-        print("✗ No alarm")
-    
-    if "--debug" in sys.argv:
-        print(f"Response time: {elapsed:.3f}s")
-        if wake_time:
-            print(f"Raw time: {wake_time}")
-    
-    # Write to display file
+def check_alarm_from_server():
+    """Check alarm from Monty server API (fallback)"""
     try:
-        with open('/tmp/alarm_display.txt', 'w') as f:
-            f.write(display_text)
-    except:
-        pass
+        # Try the real Monty server
+        response = requests.get(
+            'http://192.168.0.15:3001/api/scheduler/wake-up/status',
+            timeout=3
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and data.get('data', {}).get('enabled'):
+                wake_time = data['data'].get('time', 'Unknown')
+                next_wake = data['data'].get('nextWakeUpDateTime', '')
+                timezone_info = data['data'].get('timezone', 'Unknown timezone')
+                return f"Alarm set for {wake_time} - {next_wake} ({timezone_info}) (from server API)"
+            else:
+                return "No alarm set (from server API)"
+        else:
+            return f"Server error: {response.status_code}"
+            
+    except requests.exceptions.ConnectionError:
+        return "Cannot connect to Monty server"
+    except requests.exceptions.Timeout:
+        return "Monty server timeout"
+    except Exception as e:
+        return f"Error: {e}"
+
+def main():
+    print("🔍 Checking alarm status with timezone handling...")
+    print(f"🕐 Pi local time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"🌍 Pi UTC time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print()
     
-    return wake_time
+    # Try push notification first (instant)
+    push_result = check_alarm_from_push_notification()
+    print(f"📨 Push notification: {push_result}")
+    
+    # Try server API as backup
+    server_result = check_alarm_from_server()
+    print(f"🌐 Server API: {server_result}")
+    
+    # Show alarm state file for debugging
+    try:
+        with open('/home/pi/monty-alarm/alarm_state.json', 'r') as f:
+            state = json.load(f)
+            next_alarm_raw = state.get('nextAlarm', 'None')
+            print(f"🔍 Raw nextAlarm from file: {next_alarm_raw}")
+    except:
+        print("🔍 Could not read alarm state file")
 
 if __name__ == "__main__":
-    if "--server" in sys.argv:
-        # Run mock server
-        from mock_monty_server import MockMontyServer
-        server = MockMontyServer(3001)
-        server.start()
-        
-        try:
-            print("\nMock server running. Press Ctrl+C to stop\n")
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            server.stop()
-    else:
-        # Normal check
-        check_alarm_once()
+    main()

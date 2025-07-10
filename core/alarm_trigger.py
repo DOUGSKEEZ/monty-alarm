@@ -2,6 +2,8 @@
 """
 Alarm Trigger Logic for Monty Alarm Clock
 Monitors for alarm time and triggers wake-up sequence
+
+FIXED: Separate snooze (pause music) from dismiss (reset daily flag)
 """
 
 import asyncio
@@ -19,7 +21,8 @@ CHECK_INTERVAL = 5  # Check every 5 seconds for better accuracy
 SNOOZE_MINUTES = 9
 VOLUME_RAMP_SECONDS = 10
 ALARM_DURATION_MINUTES = 60  # Auto-stop after 1 hour
-MIN_VOLUME = 60  # Start at 60% for pre-amp only setup
+MIN_VOLUME = 10  # Start at 10%
+MAX_VOLUME = 35 # Experimenting with max volume at 30
 TRIGGER_WINDOW_SECONDS = 90  # Expanded trigger window
 
 class AlarmTrigger:
@@ -106,10 +109,38 @@ class AlarmTrigger:
                     print(f"⚠️ Could not clean up {f}: {e}")
             
     async def get_wake_time(self):
-        """Get wake time from Monty server"""
+        """Get wake time from Monty server using new push notification system with proper timezone handling"""
         try:
-            # Try localhost first (for testing), then real server
-            for url in ["http://localhost:3001", "http://192.168.0.15:3001"]:
+            # FIRST: Try to get from local state (push notifications)
+            state_file = Path("/home/pi/monty-alarm/alarm_state.json")
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r') as f:
+                        state = json.load(f)
+                        if state.get('hasAlarm') and state.get('nextAlarm'):
+                            # Parse the ISO format time from push notifications
+                            next_alarm_str = state['nextAlarm']
+                            
+                            # Handle timezone conversion properly
+                            if next_alarm_str.endswith('Z'):
+                                # UTC time - convert to local
+                                from datetime import timezone
+                                wake_time = datetime.fromisoformat(next_alarm_str.replace('Z', '+00:00'))
+                                # Convert UTC to local time
+                                wake_time = wake_time.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+                            else:
+                                # Already local time
+                                wake_time = datetime.fromisoformat(next_alarm_str)
+                            
+                            print(f"   ✓ Got alarm from push notification: {wake_time.strftime('%H:%M')} (converted from UTC)")
+                            return wake_time
+                        else:
+                            print(f"   ✗ Push notification shows no alarm set")
+                except Exception as e:
+                    print(f"   ⚠️ Could not parse push notification state: {e}")
+            
+            # FALLBACK: Try to fetch from server directly
+            for url in ["http://192.168.0.15:3001"]:  # Only try real server, not localhost
                 try:
                     # Use asyncio timeout instead of curl timeout
                     proc = await asyncio.wait_for(
@@ -133,29 +164,19 @@ class AlarmTrigger:
                         data = json.loads(stdout)
                         
                         if data.get('success') and data.get('data', {}).get('enabled'):
-                            # Try to get nextWakeUp first (ISO format with full datetime)
-                            wake_iso = data.get('data', {}).get('nextWakeUp') or data.get('nextWakeUp')
-                            
-                            if wake_iso:
-                                # Parse ISO format time
-                                wake_time = datetime.fromisoformat(wake_iso.replace('Z', '+00:00'))
-                                wake_time = wake_time.replace(tzinfo=None)  # Convert to local time
-                                print(f"   ✓ Got alarm from {url}: {wake_time.strftime('%H:%M')}")
+                            # Parse the wake-up time from API response
+                            time_str = data['data'].get('time', '')
+                            if time_str:
+                                hour, minute = map(int, time_str.split(':')[:2])
+                                now = datetime.now()
+                                wake_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                
+                                # If time has passed today, it's for tomorrow
+                                if wake_time <= now:
+                                    wake_time += timedelta(days=1)
+                                
+                                print(f"   ✓ Got alarm from server API: {wake_time.strftime('%H:%M')} (local time)")
                                 return wake_time
-                            else:
-                                # Fall back to time field (HH:MM format)
-                                wake_time_str = data['data'].get('time', '')
-                                if wake_time_str:
-                                    hour, minute = map(int, wake_time_str.split(':')[:2])
-                                    now = datetime.now()
-                                    wake_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                    
-                                    # If time has passed today, it's for tomorrow
-                                    if wake_time <= now:
-                                        wake_time += timedelta(days=1)
-                                    
-                                    print(f"   ✓ Got alarm from {url}: {wake_time.strftime('%H:%M')}")
-                                    return wake_time
                         else:
                             print(f"   ✗ {url}: No alarm enabled")
                     else:
@@ -274,7 +295,7 @@ class AlarmTrigger:
         return False
         
     async def start_music(self):
-        """Start music playback based on wake-up mode configuration"""
+        """Start music playbook based on wake-up mode configuration"""
         print("🎵 Starting wake-up music...")
         
         # Check if music is already playing
@@ -299,7 +320,7 @@ class AlarmTrigger:
             pass
             
         try:
-            # Set initial volume (60% minimum for pre-amp)
+            # Set initial volume (10% as low volume for amp)
             subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{MIN_VOLUME}%'], 
                          capture_output=True)
             
@@ -369,29 +390,44 @@ class AlarmTrigger:
             
         except Exception as e:
             print(f"❌ Error starting music: {e}")
-            
+
     async def ramp_volume(self):
         """Gradual volume increase (runs in background)"""
-        print("📈 Ramping up volume...")
+        print(f"📈 Ramping up volume from {MIN_VOLUME}% to {MAX_VOLUME}% over {VOLUME_RAMP_SECONDS} seconds...")
         
-        for volume in range(MIN_VOLUME, 101, 5):
+        # Calculate step size and delay
+        volume_range = MAX_VOLUME - MIN_VOLUME
+        steps = volume_range // 2  # Increase by 2% each step
+        if steps == 0:
+            steps = 1  # At least one step
+        step_delay = VOLUME_RAMP_SECONDS / steps
+        
+        current_volume = MIN_VOLUME
+        
+        for step in range(steps):
             if not self.alarm_active:  # Stop if alarm was cancelled
                 break
                 
-            subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{volume}%'], 
-                         capture_output=True)
+            current_volume = MIN_VOLUME + (step * 2)
+            if current_volume > MAX_VOLUME:
+                current_volume = MAX_VOLUME
+                
+            subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{current_volume}%'], 
+                        capture_output=True)
+            
+            print(f"   🔊 Volume: {current_volume}%")
             
             # Use small sleep intervals to be more responsive
-            for _ in range(5):  # 5 x 0.25s = 1.25s total
+            for _ in range(int(step_delay * 4)):  # 4 checks per step
                 if not self.alarm_active:
                     break
                 await asyncio.sleep(0.25)
                 
-        print("✅ Volume ramp complete")
-            
-    async def stop_music(self):
-        """Stop music playback"""
-        print("🛑 Stopping music...")
+        print(f"✅ Volume ramp complete at {MAX_VOLUME}%")
+
+    async def pause_music_for_snooze(self):
+        """Pause music for snooze without resetting daily alarm flag"""
+        print("⏸️ Pausing music for snooze...")
         
         # Cancel volume ramp if it's still running
         if hasattr(self, 'volume_task') and self.volume_task and not self.volume_task.done():
@@ -410,20 +446,39 @@ class AlarmTrigger:
         # Clear the process reference
         self.music_process = None
             
-        # Reset volume to reasonable level
-        subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '80%'], 
-                     capture_output=True)
-            
-        # Clear display
+        # Reset volume to SAFE level
+        subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '25%'], 
+                    capture_output=True)
+        
+        print("🔊 Volume reset to 25%")
+        
+        # Clear display (will be updated with snooze time)
         display_file = self.signals_dir / 'alarm_display.txt'
         try:
             with open(display_file, 'w') as f:
                 f.write("")
         except:
             pass
+        
+        # 🔒 IMPORTANT: DO NOT reset alarm_triggered_today during snooze!
+        # The alarm is still active, just paused
+        print("💤 Music paused for snooze - alarm still active for today")
             
         # Small delay to ensure music player is fully dead
         await asyncio.sleep(0.5)
+
+    async def dismiss_alarm_completely(self):
+        """Completely dismiss the alarm and reset daily alarm flag"""
+        print("🛑 Dismissing alarm completely...")
+        
+        # First pause the music
+        await self.pause_music_for_snooze()
+        
+        # 🆕 NOW reset the daily flag since alarm is fully dismissed
+        self.alarm_triggered_today = False
+        self.last_alarm_time = None
+        self.save_state()
+        print("🔄 Alarm dismissed completely - ready for new alarms today!")
             
     async def trigger_alarm(self):
         """Trigger the alarm sequence"""
@@ -449,17 +504,18 @@ class AlarmTrigger:
                 elapsed = int((datetime.now() - alarm_start).total_seconds())
                 print(f"   ⏳ Alarm active for {elapsed}s...")
             
-            # Check for stop button
+            # Check for stop button - this completely dismisses the alarm
             if await self.check_stop():
-                print("✋ Alarm stopped by user")
+                print("✋ Alarm stopped by user - dismissing completely")
+                await self.dismiss_alarm_completely()
                 break
                 
-            # Check for snooze
+            # Check for snooze - this only pauses music temporarily
             if await self.check_snooze():
-                await self.stop_music()
+                await self.pause_music_for_snooze()
                 print(f"😴 Snoozing until {self.snooze_until.strftime('%H:%M')}")
                 
-                # Update display
+                # Update display with snooze info
                 display_file = self.signals_dir / 'alarm_display.txt'
                 try:
                     with open(display_file, 'w') as f:
@@ -469,9 +525,10 @@ class AlarmTrigger:
                 
                 # Wait for snooze period
                 while datetime.now() < self.snooze_until and self.alarm_active:
-                    # Still check for stop during snooze
+                    # Still check for stop during snooze (complete dismissal)
                     if await self.check_stop():
-                        print("✋ Alarm stopped during snooze")
+                        print("✋ Alarm dismissed during snooze")
+                        await self.dismiss_alarm_completely()
                         self.alarm_active = False
                         break
                     await asyncio.sleep(5)
@@ -481,16 +538,16 @@ class AlarmTrigger:
                     print("⏰ Snooze time over, resuming alarm...")
                     await self.start_music()
                     
-            # Check for timeout
+            # Check for timeout - this also completely dismisses the alarm
             if datetime.now() - alarm_start > timedelta(minutes=ALARM_DURATION_MINUTES):
-                print("⏱️ Alarm timeout reached")
+                print("⏱️ Alarm timeout reached - dismissing completely")
+                await self.dismiss_alarm_completely()
                 break
                 
             # Check more frequently for better button responsiveness
             await asyncio.sleep(0.2)  # Check 5 times per second
             
         # Clean up
-        await self.stop_music()
         self.alarm_active = False
         print("✅ Alarm sequence complete")
         
@@ -499,7 +556,7 @@ class AlarmTrigger:
         print("🔍 Starting alarm monitor...")
         print(f"   Check interval: {CHECK_INTERVAL} seconds")
         print(f"   Snooze duration: {SNOOZE_MINUTES} minutes")
-        print(f"   Volume ramp: {MIN_VOLUME}% to 100% over {VOLUME_RAMP_SECONDS}s")
+        print(f"   Volume ramp: {MIN_VOLUME}% to {MAX_VOLUME}% over {VOLUME_RAMP_SECONDS}s")
         print(f"   Trigger window: {TRIGGER_WINDOW_SECONDS} seconds")
         
         while self.running:
@@ -541,8 +598,10 @@ class AlarmTrigger:
                         print(f"⏰ Next alarm: {wake_time.strftime('%a %H:%M')} (in {time_str})")
                     
                     # Check if it's time to trigger
+                    trigger_start = 10    # Start checking 10 seconds early
+                    trigger_end = -30     # Stop checking 30 seconds after
                     # Expanded trigger window: up to TRIGGER_WINDOW_SECONDS after alarm time
-                    if -TRIGGER_WINDOW_SECONDS <= time_until <= 0 and not self.alarm_triggered_today and not self.alarm_active:
+                    if trigger_end <= time_until <= trigger_start and not self.alarm_triggered_today and not self.alarm_active:
                         print(f"🎯 TRIGGER CONDITIONS MET! Time until: {time_until:.1f}s")
                         await self.trigger_alarm()
                     elif time_until < -TRIGGER_WINDOW_SECONDS and not self.alarm_triggered_today:

@@ -27,3 +27,7 @@ backup_*/
 
 # Test outputs
 test_alarm_time.json
+venv/
+.venv/
+*.pyc
+__pycache__/

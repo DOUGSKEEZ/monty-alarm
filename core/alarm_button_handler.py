@@ -20,7 +20,7 @@ SNOOZE_DEVICE_PATH = "/dev/input/event7"
 ALARM_DEVICE_PATH = "/dev/input/event2"
 
 # Long press threshold (seconds)
-LONG_PRESS_THRESHOLD = 2.0
+LONG_PRESS_THRESHOLD = 1.5
 
 class AlarmButtonHandler:
     def __init__(self):
