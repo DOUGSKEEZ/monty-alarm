@@ -1,137 +1,90 @@
 #!/bin/bash
-# Check if alarm system is ready after boot
+# Monty alarm health check: services, buttons, audio, clock, schedule, Monty
+cd "$(dirname "$0")/.."
 
-echo "🏥 Monty Alarm System Health Check"
-echo "===================================="
-echo "Time: $(date)"
-echo ""
-
-# Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+ok()   { echo -e "   ${GREEN}✓${NC} $1"; }
+bad()  { echo -e "   ${RED}✗${NC} $1"; PROBLEMS=true; }
+warn() { echo -e "   ${YELLOW}!${NC} $1"; }
+setting() { python3 -c "import sys; sys.path.insert(0, 'core'); import settings; print(settings.$1)"; }
 
-# Check services
-echo "1. Checking Services..."
+PROBLEMS=false
+MONTY_URL=$(setting MONTY_URL)
+AUDIO_CARD=$(setting AUDIO_CARD)
 
-check_service() {
-    local service=$1
-    if systemctl is-active --quiet $service; then
-        echo -e "   ${GREEN}✓${NC} $service is running"
-        return 0
-    else
-        echo -e "   ${RED}✗${NC} $service is not running"
-        systemctl status $service --no-pager | grep -E "(Active:|Main PID:)" | sed 's/^/      /'
-        return 1
-    fi
-}
+echo "🏥 Monty Alarm System Health Check"
+echo "===================================="
+echo "Time: $(date)"
 
-SERVICES_OK=true
-check_service alarm-trigger.service || SERVICES_OK=false
-check_service alarm-buttons.service || SERVICES_OK=false
-
-# Check button devices
-echo ""
-echo "2. Checking Button Devices..."
-
-check_device() {
-    local device=$1
-    local name=$2
-    if [ -e "$device" ]; then
-        echo -e "   ${GREEN}✓${NC} $name exists at $device"
-        return 0
-    else
-        echo -e "   ${RED}✗${NC} $name missing at $device"
-        return 1
-    fi
-}
-
-# Get current device paths from the button handler
-SNOOZE_DEV=$(grep "SNOOZE_DEVICE_PATH =" /home/pi/monty-alarm/alarm_button_handler.py | cut -d'"' -f2)
-ALARM_DEV=$(grep "ALARM_DEVICE_PATH =" /home/pi/monty-alarm/alarm_button_handler.py | cut -d'"' -f2)
-
-DEVICES_OK=true
-check_device "$SNOOZE_DEV" "SNOOZE button" || DEVICES_OK=false
-check_device "$ALARM_DEV" "ALARM button" || DEVICES_OK=false
-
-# Check if devices might have changed
-echo ""
-echo "   Current HID devices:"
-for device in /dev/input/event*; do
-    if [ -e "$device" ]; then
-        # Check if it's a HID 8808:6600 device
-        info=$(udevadm info --query=all --name=$device 2>/dev/null | grep -E "(ID_VENDOR_ID=8808|HID 8808:6600)" || true)
-        if [ -n "$info" ]; then
-            # Check if it has KEY_A capability
-            if python3 -c "import evdev; d=evdev.InputDevice('$device'); import sys; sys.exit(0 if 30 in d.capabilities().get(1,[]) else 1)" 2>/dev/null; then
-                echo -e "      ${GREEN}$device${NC} - HID button device (has KEY_A)"
-            else
-                echo "      $device - HID device (no KEY_A)"
-            fi
-        fi
-    fi
+echo
+echo "1. Services"
+for service in monty-alarm-api alarm-trigger alarm-buttons; do
+    if systemctl is-active --quiet $service; then ok "$service is running"; else bad "$service is not running"; fi
 done
 
-# Check audio
-echo ""
-echo "3. Checking Audio..."
+echo
+echo "2. Buttons"
+for name in SNOOZE CHECK; do
+    found=$(setting "${name}_DEVICES" | tr -d "[]',")
+    present=""
+    for dev in $found; do [ -e "$dev" ] && present="$present ${dev##*usb-0:}"; done
+    if [ -n "$present" ]; then ok "$name button on USB$present"; else bad "$name button missing"; fi
+done
 
-if pactl info >/dev/null 2>&1; then
-    echo -e "   ${GREEN}✓${NC} PulseAudio is running"
-    
-    # Check for Fosi Audio
-    if pactl list sinks | grep -q "Fosi Audio"; then
-        echo -e "   ${GREEN}✓${NC} Fosi Audio ZD3 detected"
+echo
+echo "3. Audio"
+if [ -e /proc/asound/$AUDIO_CARD ]; then
+    ok "$AUDIO_CARD is connected"
+    if amixer -c $AUDIO_CARD sget Alarm >/dev/null 2>&1; then
+        ok "Alarm volume control: $(amixer -M -c $AUDIO_CARD sget Alarm | grep -oE '[0-9]+%' | head -1)"
     else
-        echo -e "   ${YELLOW}!${NC} Fosi Audio ZD3 not detected"
+        warn "Alarm volume control not created yet (it appears the first time something plays)"
     fi
 else
-    echo -e "   ${RED}✗${NC} PulseAudio not running"
+    bad "$AUDIO_CARD is NOT connected - the alarm would be silent"
 fi
+command -v pianobar >/dev/null && ok "pianobar installed" || bad "pianobar not installed"
+command -v mpg123 >/dev/null && ok "mpg123 installed" || bad "mpg123 not installed"
+python3 core/wakeup_mode_manager.py status | sed -n '3,4p' | sed 's/^/   /'
 
-# Check Pianobar
-if command -v pianobar >/dev/null 2>&1; then
-    echo -e "   ${GREEN}✓${NC} Pianobar installed"
+echo
+echo "4. Clock"
+if [ "$(timedatectl show -p NTPSynchronized --value)" = "yes" ]; then ok "Clock is NTP-synchronized"; else bad "Clock is NOT synchronized"; fi
+
+echo
+echo "5. Schedule"
+curl -s -m 3 -o /dev/null http://localhost:5000/api/health && ok "Local API answering on port 5000" || bad "Local API (port 5000) not answering"
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'core')
+import settings
+from statefiles import pushed_alarm, describe_alarm, read_json
+_, at = pushed_alarm()
+pushed = read_json(settings.ALARM_STATE_FILE, {}) or {}
+print(f"   Pushed by Monty: {describe_alarm(at) if at else 'no alarm'} (last update {pushed.get('lastUpdate')})")
+handled = read_json(settings.TRIGGER_STATE_FILE, {}) or {}
+if handled:
+    print(f"   Last alarm handled: {handled.get('handled_alarm')} ({handled.get('result')} at {handled.get('at')})")
+PY
+
+echo
+echo "6. Monty ($MONTY_URL)"
+if status=$(curl -s -m 5 "$MONTY_URL/api/scheduler/wake-up/status"); then
+    echo "$status" | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print(f\"   Monty wake-up: enabled={d['enabled']} time={d['time']}\")" \
+        && ok "Monty reachable" || warn "Monty answered but the reply was unexpected"
 else
-    echo -e "   ${RED}✗${NC} Pianobar not installed"
+    bad "Cannot reach Monty"
 fi
 
-# Check alarm state
-echo ""
-echo "4. Checking Alarm State..."
-
-if [ -f /home/pi/monty-alarm/alarm_state.json ]; then
-    echo -e "   ${GREEN}✓${NC} Alarm state file exists"
-    echo "      Content: $(cat /home/pi/monty-alarm/alarm_state.json)"
-else
-    echo -e "   ${YELLOW}!${NC} No alarm state file (normal for first run)"
-fi
-
-# Check network (for Monty server)
-echo ""
-echo "5. Checking Network..."
-
-if ping -c 1 -W 2 192.168.0.15 >/dev/null 2>&1; then
-    echo -e "   ${GREEN}✓${NC} Can reach Monty server (192.168.0.15)"
-else
-    echo -e "   ${YELLOW}!${NC} Cannot reach Monty server (will use mock)"
-fi
-
-# Summary
-echo ""
+echo
 echo "===================================="
-if [ "$SERVICES_OK" = true ] && [ "$DEVICES_OK" = true ]; then
+if [ "$PROBLEMS" = false ]; then
     echo -e "${GREEN}✅ System is READY${NC}"
-    echo "   Alarm system should work after reboot"
 else
-    echo -e "${RED}❌ System has ISSUES${NC}"
-    echo "   Check the errors above"
+    echo -e "${RED}❌ System has ISSUES - see above${NC}"
 fi
-
-echo ""
-echo "Quick Actions:"
-echo "  • View alarm trigger logs: sudo journalctl -u alarm-trigger.service -f"
-echo "  • View button logs: sudo journalctl -u alarm-buttons.service -f"
-echo "  • Test alarm: python3 /home/pi/monty-alarm/test_alarm_immediate.py 30"
-echo "  • Find button devices: sudo python3 /home/pi/monty-alarm/find_button_devices.py"
+echo
+echo "Logs: sudo journalctl -u alarm-trigger -u alarm-buttons -u monty-alarm-api -f"

@@ -1,0 +1,18 @@
+[Unit]
+Description=Monty Alarm API Server (receives Monty's schedule pushes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/monty-alarm
+ExecStart=/home/pi/monty-alarm/venv/bin/python3 -u /home/pi/monty-alarm/server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

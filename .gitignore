@@ -1,13 +1,15 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.pyc
+venv/
+.venv/
 
-# Config files (auto-generated, may contain personal data)
-config/
+# Runtime state (written by the services)
 alarm_state.json
+trigger_state.json
 wakeup_config.json
+*.tmp
+config/
 
 # Signal files (runtime communication)
 signals/*
@@ -24,10 +26,3 @@ backup_*/
 
 # Logs
 *.log
-
-# Test outputs
-test_alarm_time.json
-venv/
-.venv/
-*.pyc
-__pycache__/

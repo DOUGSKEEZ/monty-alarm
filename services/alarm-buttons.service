@@ -4,10 +4,11 @@ After=multi-user.target
 
 [Service]
 Type=simple
-User=root
+User=pi
+Group=pi
+SupplementaryGroups=input
 WorkingDirectory=/home/pi/monty-alarm
-ExecStartPre=/bin/sleep 5
-ExecStart=/home/pi/monty-alarm/scripts/button-service-wrapper.sh
+ExecStart=/usr/bin/python3 -u /home/pi/monty-alarm/core/alarm_button_handler.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
