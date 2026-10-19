@@ -97,9 +97,9 @@ async def main():
 
     print("\n🎯 Alarm Clock Button Handler Started")
     print("=" * 50)
-    print("SNOOZE button (USB port 1.3):")
+    print(f"SNOOZE button (USB port {settings.SNOOZE_PORT}):")
     print(f"  • Press to snooze alarm for {settings.SNOOZE_MINUTES} minutes")
-    print("\nCHECK button (USB port 1.4):")
+    print(f"\nCHECK button (USB port {settings.CHECK_PORT}):")
     print("  • Tap to log the next alarm")
     print(f"  • Hold {settings.LONG_PRESS_SECONDS} seconds to stop alarm\n")
 

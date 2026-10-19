@@ -295,6 +295,9 @@ class AlarmTrigger:
         print(f"   Volume ramp: {settings.MIN_VOLUME}% to {settings.MAX_VOLUME}% over {settings.VOLUME_RAMP_SECONDS}s "
               f"on {settings.AUDIO_CARD} ({'connected' if audio_device_present() else 'NOT CONNECTED'})")
         self.check_clock()
+        # A ring never survives a restart, so a WAKE! or SNZ left by a power cut
+        # is stale; clear it so the button lights don't show it all night
+        write_display("")
 
         while True:
             try:

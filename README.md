@@ -4,7 +4,7 @@ A bedside Raspberry Pi that plays wake-up music at the time set in the Monty hom
 
 ## Features
 - Monty pushes every schedule change to the Pi; the Pi re-syncs at boot and hourly
-- Physical Snooze and Stop buttons (two single-key USB keyboards)
+- Physical Snooze and Check/Stop buttons (two single-key USB keypads) whose lights follow the alarm and stay dark at night
 - Wake-up music from Pandora (pianobar) or a looping MP3, with an automatic MP3 fallback if Pandora doesn't start
 - Gradual volume ramp on the Fosi Audio ZD3
 - 9-minute snooze, auto-stop after 60 minutes, still rings up to 15 minutes late after a reboot
@@ -20,6 +20,7 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
  (port 5000)                                                    ▲                     └► ALSA → ZD3
                                                                 │ signals/alarm_snooze, alarm_stop
                                                core/alarm_button_handler.py ◄── USB buttons
+                                               core/button_leds.py ──► button lights (follows signals/alarm_display.txt)
 ```
 
 | Service | Runs | Job |
@@ -27,14 +28,22 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 | `monty-alarm-api.service` | `server.py` (Flask, venv) | Receives Monty's pushes, writes `alarm_state.json`, asks Monty to sync, serves `/api/health` |
 | `alarm-trigger.service` | `core/alarm_trigger.py` | Rings at the alarm time, plays music, ramps volume, handles snooze/stop |
 | `alarm-buttons.service` | `core/alarm_button_handler.py` | Reads the buttons and drops signal files for the trigger |
+| `button-leds.service` | `core/button_leds.py watch` | Sets the button lights from the alarm's state. Separate, so a light problem can't stop the alarm |
 
-All three run as user `pi`. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
+All four run as user `pi`. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
 
 ## Buttons
-- **Snooze** (USB port 1.3): press to snooze 9 minutes. Press as often as you like.
-- **Check** (USB port 1.4): tap to log the next alarm to the journal; **hold 1.5 s to stop** the alarm, including during a snooze.
+- **Snooze** (USB port 1.4): press to snooze 9 minutes. Press as often as you like.
+- **Check** (USB port 1.3): tap to log the next alarm to the journal; **hold 1.5 s to stop** the alarm, including during a snooze.
 
-The buttons' LEDs are run by their own firmware: they don't respond to the keyboard lock lights, so the Pi can't switch them.
+Both buttons run our own firmware ([`firmware/button/`](firmware/button/README.md)): a plain keyboard that sends `a`, with an RGB light the Pi controls over USB. The lights follow the alarm (colours in `settings.BUTTON_LIGHTS`):
+
+| | Idle (day and night) | Ringing | Snoozing | Alarm ended |
+| --- | --- | --- | --- | --- |
+| Snooze | off | green, breathing | amber | pink/purple fast blink for 3 s, then off |
+| Check | off | red | red | pink/purple fast blink for 3 s, then off |
+
+A button that's unplugged and plugged back in starts dark and gets its light back within a second. The firmware can be updated from the Pi without opening the button (see the firmware README).
 
 Presses while no alarm is ringing are ignored, so they never carry over to the next alarm. The buttons are found by USB port (`/dev/input/by-path`), because both are the same model and `/dev/input/by-id` can't tell them apart: **if you swap the plugs, the buttons swap**.
 
@@ -58,7 +67,11 @@ sudo ./scripts/install.sh
 ./scripts/check-alarm-system.sh
 
 # Logs
-sudo journalctl -u alarm-trigger -u alarm-buttons -u monty-alarm-api -f
+sudo journalctl -u alarm-trigger -u alarm-buttons -u button-leds -u monty-alarm-api -f
+
+# Button lights (1.4 = Snooze, 1.3 = Check). A manual set lasts until the alarm's state next changes
+python3 core/button_leds.py info
+python3 core/button_leds.py set 1.4 0 200 0 breathe   # solid, breathe, blink or fast
 
 # Wake-up music
 python3 core/wakeup_mode_manager.py                 # status and help
@@ -87,6 +100,7 @@ sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo s
 | `signals/alarm_snooze`, `signals/alarm_stop` | One-shot button signals |
 | `signals/alarm_display.txt` | `WAKE!`, `SNZ HH:MM` or empty: a stand-in until there's a display |
 | `music/` | MP3s |
+| `firmware/button/` | The buttons' firmware, its udev rule and how to flash it |
 
 ## Requirements
-Raspberry Pi OS (Debian 12), `python3-evdev`, `pianobar` (logged in via `~/.config/pianobar/config` with `autostart_station`), `mpg123`, `alsa-utils`, and a venv with Flask for `server.py`. User `pi` must be in the `audio` and `input` groups.
+Raspberry Pi OS (Debian 12), `python3-evdev`, `pianobar` (logged in via `~/.config/pianobar/config` with `autostart_station`), `mpg123`, `alsa-utils`, and a venv with Flask for `server.py`. User `pi` must be in the `audio`, `input` and `plugdev` groups. Building and flashing the button firmware also needs `sdcc`, `uhubctl` (apt) and [wchisp](https://github.com/ch32-rs/wchisp).

@@ -1,0 +1,5 @@
+# Monty alarm buttons: let the plugdev group (user pi) send LED requests to the
+# buttons running firmware/button/, and flash them through the WCH bootloader.
+# Installed to /etc/udev/rules.d/ by scripts/install.sh.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", ATTR{product}=="Monty Alarm Button", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="4348", ATTR{idProduct}=="55e0", MODE="0660", GROUP="plugdev"

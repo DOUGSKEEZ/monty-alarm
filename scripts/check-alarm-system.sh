@@ -21,7 +21,7 @@ echo "Time: $(date)"
 
 echo
 echo "1. Services"
-for service in monty-alarm-api alarm-trigger alarm-buttons; do
+for service in monty-alarm-api alarm-trigger alarm-buttons button-leds; do
     if systemctl is-active --quiet $service; then ok "$service is running"; else bad "$service is not running"; fi
 done
 
@@ -33,6 +33,22 @@ for name in SNOOZE CHECK; do
     for dev in $found; do [ -e "$dev" ] && present="$present ${dev##*usb-0:}"; done
     if [ -n "$present" ]; then ok "$name button on USB$present"; else bad "$name button missing"; fi
 done
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'core')
+import settings
+from button_leds import find_pads, get_info
+pads = find_pads()
+for name, port in (("SNOOZE", settings.SNOOZE_PORT), ("CHECK", settings.CHECK_PORT)):
+    if port not in pads:
+        print(f"   ! {name} light: no button with the Monty firmware on USB {port}")
+        continue
+    try:
+        info = get_info(pads[port])
+        print(f"   ✓ {name} light: firmware {info['version']}, showing {info['rgb']} {info['effect']}")
+    except OSError as e:
+        print(f"   ! {name} light: can't reach it ({e})")
+PY
 
 echo
 echo "3. Audio"
@@ -87,4 +103,4 @@ else
     echo -e "${RED}❌ System has ISSUES - see above${NC}"
 fi
 echo
-echo "Logs: sudo journalctl -u alarm-trigger -u alarm-buttons -u monty-alarm-api -f"
+echo "Logs: sudo journalctl -u alarm-trigger -u alarm-buttons -u button-leds -u monty-alarm-api -f"

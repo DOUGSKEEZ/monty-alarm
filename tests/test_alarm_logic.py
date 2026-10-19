@@ -74,6 +74,27 @@ class StateFileTests(unittest.TestCase):
             self.assertFalse(statefiles.take_signal(signal_file))
 
 
+class ButtonLightTests(unittest.TestCase):
+    def test_display_text_maps_to_state(self):
+        from button_leds import alarm_state
+        self.assertEqual(alarm_state('WAKE!'), 'ringing')
+        self.assertEqual(alarm_state('SNZ 07:18'), 'snoozing')
+        self.assertEqual(alarm_state(''), 'idle')
+
+    def test_every_state_has_a_valid_look_for_both_buttons(self):
+        from button_leds import MODES
+        self.assertEqual(set(settings.BUTTON_LIGHTS), {'idle', 'ringing', 'snoozing', 'stopped'})
+        for state, looks in settings.BUTTON_LIGHTS.items():
+            self.assertEqual(set(looks), {'snooze', 'check'}, state)
+            for (rgb, effect) in looks.values():
+                self.assertIn(effect, MODES, state)
+                self.assertTrue(all(0 <= c <= 255 for c in rgb), state)
+
+    def test_idle_is_dark(self):
+        for rgb, _ in settings.BUTTON_LIGHTS['idle'].values():
+            self.assertEqual(rgb, (0, 0, 0))
+
+
 class PushReceiverTests(unittest.TestCase):
     def setUp(self):
         import server

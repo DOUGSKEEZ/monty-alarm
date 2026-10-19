@@ -25,15 +25,29 @@ SNOOZE_SIGNAL = SIGNALS_DIR / "alarm_snooze"
 STOP_SIGNAL = SIGNALS_DIR / "alarm_stop"
 DISPLAY_FILE = SIGNALS_DIR / "alarm_display.txt"      # WAKE!, SNZ HH:MM or empty, until there's a real display
 
-# Buttons. Both are the same model (HID 8808:6600) with no serial number, so
-# /dev/input/by-id can't tell them apart. by-path names the USB port instead:
-# swap the plugs and the buttons swap. Each button has two keyboard interfaces
-# (:1.0 and :1.2); KEY_A arrives on :1.0 today, but watch both in case the
-# button's firmware mode changes.
+# Buttons. Both run our firmware (firmware/button/: USB 1209:0001, one keyboard
+# interface :1.0 that sends KEY_A) and look identical, so /dev/input/by-id
+# can't tell them apart. by-path names the USB port instead: swap the plugs
+# and the buttons swap.
+SNOOZE_PORT = "1.4"
+CHECK_PORT = "1.3"
 _USB_PORT = "/dev/input/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0"
-SNOOZE_DEVICES = [f"{_USB_PORT}:1.3:1.0-event-kbd", f"{_USB_PORT}:1.3:1.2-event-kbd"]
-CHECK_DEVICES = [f"{_USB_PORT}:1.4:1.0-event-kbd", f"{_USB_PORT}:1.4:1.2-event-kbd"]
+SNOOZE_DEVICES = [f"{_USB_PORT}:{SNOOZE_PORT}:1.0-event-kbd"]
+CHECK_DEVICES = [f"{_USB_PORT}:{CHECK_PORT}:1.0-event-kbd"]
 LONG_PRESS_SECONDS = 1.5  # Hold Check this long to stop the alarm
+
+# Button lights, set by core/button_leds.py from the alarm's state. Each look is
+# ((R, G, B), effect): R, G, B are 0-255 and effect is "solid", "breathe",
+# "blink" (1 s on/off) or "fast" (1/8 s on/off).
+_OFF = ((0, 0, 0), "solid")
+_ENDED = ((160, 0, 140), "fast")  # Pink/purple: the alarm just ended
+BUTTON_LIGHTS = {
+    "idle":     {"snooze": _OFF, "check": _OFF},
+    "ringing":  {"snooze": ((0, 200, 0), "breathe"), "check": ((120, 0, 0), "solid")},
+    "snoozing": {"snooze": ((90, 35, 0), "solid"), "check": ((120, 0, 0), "solid")},
+    "stopped":  {"snooze": _ENDED, "check": _ENDED},
+}
+STOPPED_LIGHT_SECONDS = 3  # How long "stopped" shows before the lights go off
 
 # Audio goes straight to ALSA (see audio/asound.conf). PulseAudio is masked
 # by scripts/install.sh: it only ran while someone was logged in, and then it

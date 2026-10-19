@@ -6,6 +6,7 @@
 #   /etc/asound.conf      <- audio/asound.conf  (old one backed up next to it)
 #   /etc/libao.conf       <- audio/libao.conf   (old one backed up next to it)
 #   /etc/systemd/system/  <- services/*.service
+#   /etc/udev/rules.d/99-monty-buttons.rules <- firmware/button/99-monty-buttons.rules
 #   PulseAudio masked for all users (undo: systemctl --global unmask pulseaudio.service pulseaudio.socket)
 set -e
 cd "$(dirname "$0")/.."
@@ -27,6 +28,11 @@ install_config() {
 
 install_config audio/asound.conf /etc/asound.conf
 install_config audio/libao.conf /etc/libao.conf
+
+# Lets pi (plugdev) set the button lights and reflash the buttons
+install_config firmware/button/99-monty-buttons.rules /etc/udev/rules.d/99-monty-buttons.rules
+udevadm control --reload
+udevadm trigger --subsystem-match=usb --action=change
 
 # While PulseAudio runs (it starts with any login), /etc/alsa/conf.d/99-pulse.conf
 # points ALSA's default device at it, bypassing asound.conf and the Alarm volume.
@@ -51,7 +57,7 @@ for f in alarm_state.json trigger_state.json wakeup_config.json; do
 done
 
 systemctl daemon-reload
-systemctl enable monty-alarm-api.service alarm-trigger.service alarm-buttons.service
-systemctl restart monty-alarm-api.service alarm-trigger.service alarm-buttons.service
+systemctl enable monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service
+systemctl restart monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service
 echo
-systemctl --no-pager --lines=0 status monty-alarm-api.service alarm-trigger.service alarm-buttons.service | grep -E "●|Active:"
+systemctl --no-pager --lines=0 status monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service | grep -E "●|Active:"

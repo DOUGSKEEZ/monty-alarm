@@ -1,0 +1,12 @@
+# Build intermediates (make removes most of them; button.bin is kept)
+*.ihx
+*.hex
+*.lk
+*.map
+*.mem
+*.lst
+*.rel
+*.rst
+*.sym
+*.asm
+*.adb
