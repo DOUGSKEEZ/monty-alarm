@@ -34,7 +34,7 @@ CHECK_PORT = "1.3"
 _USB_PORT = "/dev/input/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0"
 SNOOZE_DEVICES = [f"{_USB_PORT}:{SNOOZE_PORT}:1.0-event-kbd"]
 CHECK_DEVICES = [f"{_USB_PORT}:{CHECK_PORT}:1.0-event-kbd"]
-LONG_PRESS_SECONDS = 1.5  # Hold Check this long to stop the alarm
+LONG_PRESS_SECONDS = 1.1  # Hold Check this long to stop the alarm
 
 # Button lights, set by core/button_leds.py from the alarm's state. Each look is
 # ((R, G, B), effect): R, G, B are 0-255 and effect is "solid", "breathe",

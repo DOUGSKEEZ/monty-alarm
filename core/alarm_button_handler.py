@@ -3,7 +3,7 @@
 Alarm Clock Button Handler using USB single-key keyboards
 Maps KEY_A events to SNOOZE and CHECK ALARM functions:
   Snooze (left):  press to snooze for 9 minutes
-  Check (right):  tap to log the next alarm, hold 1.5 s to stop the alarm
+  Check (right):  tap to log the next alarm, hold 1.1 s to stop the alarm
 Talks to alarm_trigger.py through signal files in signals/.
 Runs as user pi, which can read the buttons through the input group.
 """

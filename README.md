@@ -36,7 +36,7 @@ All four run as user `pi`. Every path, address and tuning value is in [`core/set
 
 ## Buttons
 - **Snooze** (USB port 1.4): press to snooze 9 minutes. Press as often as you like.
-- **Check** (USB port 1.3): tap to log the next alarm to the journal; **hold 1.5 s to stop** the alarm, including during a snooze.
+- **Check** (USB port 1.3): tap to log the next alarm to the journal; **hold 1.1 s to stop** the alarm, including during a snooze.
 
 Both buttons run our own firmware ([`firmware/button/`](firmware/button/README.md)): a plain keyboard that sends `a`, with an RGB light the Pi controls over USB. The lights follow the alarm (colours in `settings.BUTTON_LIGHTS`):
 
