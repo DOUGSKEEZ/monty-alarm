@@ -52,15 +52,18 @@ PY
 
 echo
 echo "3. Audio"
+RELAY=$(python3 core/speakers.py status)
 if [ -e /proc/asound/$AUDIO_CARD ]; then
-    ok "$AUDIO_CARD is connected"
+    ok "$AUDIO_CARD is awake (speaker relay $RELAY)"
     if amixer -c $AUDIO_CARD sget Alarm >/dev/null 2>&1; then
         ok "Alarm volume control: $(amixer -M -c $AUDIO_CARD sget Alarm | grep -oE '[0-9]+%' | head -1)"
     else
         warn "Alarm volume control not created yet (it appears the first time something plays)"
     fi
+elif [ "$RELAY" = "off" ]; then
+    ok "$AUDIO_CARD in standby - the speaker relay wakes it at alarm time"
 else
-    bad "$AUDIO_CARD is NOT connected - the alarm would be silent"
+    bad "$AUDIO_CARD is NOT on USB although the speaker relay is $RELAY - the alarm would be silent"
 fi
 command -v pianobar >/dev/null && ok "pianobar installed" || bad "pianobar not installed"
 command -v mpg123 >/dev/null && ok "mpg123 installed" || bad "mpg123 not installed"

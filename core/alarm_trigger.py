@@ -7,6 +7,10 @@ rings at the alarm time, and handles snooze and stop from the buttons.
 Each alarm is remembered by its nextAlarm value once it has rung (or been
 missed), so it never rings twice and any number of alarms a day work.
 
+At alarm time it clicks the speaker relay on (core/speakers.py), waits for
+the ZD3 to wake and the ZA3 to unmute, then starts the music. The speakers
+stay on through snoozes and go off SPEAKER_OFF_DELAY_SECONDS after the alarm.
+
 Run with --test-music [seconds] to play the wake-up music through the
 alarm's audio path without waiting for an alarm.
 """
@@ -16,11 +20,13 @@ import re
 import signal
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import settings
+import speakers
 from statefiles import (read_json, write_json, pushed_alarm, load_wakeup_config,
                         describe_alarm, take_signal, write_display)
 
@@ -59,6 +65,7 @@ class AlarmTrigger:
         self.player_started = None
         self.output_task = None     # Drains the player's output into the journal
         self.volume_task = None
+        self.speakers_off_at = None  # When to switch the speakers off after an alarm
         state = read_json(settings.TRIGGER_STATE_FILE, {}) or {}
         self.handled_alarm = state.get('handled_alarm')
         self.logged_alarm = NOT_LOGGED
@@ -91,6 +98,62 @@ class AlarmTrigger:
             print("💤 Snooze pressed with no alarm ringing - ignored")
         if take_signal(settings.STOP_SIGNAL):
             print("🛑 Stop pressed with no alarm ringing - ignored")
+
+    # ---------- Speakers ----------
+
+    async def wake_speakers(self):
+        """Click the speaker relay on and wait until the ZD3 can play and the ZA3
+        has unmuted. A ZD3 that's already on needs no wait. Never raises: if the
+        ZD3 doesn't wake, the alarm goes ahead anyway."""
+        self.speakers_off_at = None
+        if audio_device_present():
+            speakers.switch(True)
+            return
+        print("🔈 Speakers on, waiting for the ZD3 to wake...")
+        clicked = time.monotonic()
+        deadline = clicked + settings.SPEAKER_WAIT_SECONDS
+        speakers.switch(True)
+        while not audio_device_present():
+            if time.monotonic() >= deadline:
+                print(f"🔇 WARNING: the ZD3 didn't wake within {settings.SPEAKER_WAIT_SECONDS}s "
+                      "- the alarm may be silent!")
+                return
+            await asyncio.sleep(0.1)
+        appeared = time.monotonic()
+        # The ZD3 is listed a moment before it can play, and its first stream after
+        # waking snaps as it switches clock. Play silence until it works, while the
+        # ZA3 is still muted, so the music starts clean.
+        while not await self.play_silence():
+            if time.monotonic() >= deadline:
+                print("⚠️ The ZD3 is on USB but won't play yet - starting the music anyway")
+                return
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(max(0.0, settings.SPEAKER_SETTLE_SECONDS - (time.monotonic() - appeared)))
+        print(f"🔊 Speakers ready {time.monotonic() - clicked:.1f}s after the click")
+
+    async def play_silence(self):
+        """A second of 44.1 kHz silence through the alarm's audio path. True if it played."""
+        aplay = await asyncio.create_subprocess_exec(
+            'aplay', '-q', '-d', '1', '-f', 'cd', '/dev/zero',
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            return await asyncio.wait_for(aplay.wait(), timeout=5) == 0
+        except asyncio.TimeoutError:
+            aplay.kill()
+            await aplay.wait()
+            return False
+
+    def speakers_off_when_due(self):
+        """Switch the speakers off SPEAKER_OFF_DELAY_SECONDS after an alarm. Anything
+        the Pi plays meanwhile (pianobar from SSH, say) restarts the countdown."""
+        if self.speakers_off_at is None:
+            return
+        if speakers.zd3_playing():
+            self.speakers_off_at = datetime.now() + timedelta(seconds=settings.SPEAKER_OFF_DELAY_SECONDS)
+        elif datetime.now() >= self.speakers_off_at:
+            if speakers.switch(False):
+                print("🔈 Speakers off")
+            self.speakers_off_at = None
 
     # ---------- Music ----------
 
@@ -233,6 +296,14 @@ class AlarmTrigger:
             await self.restart_if_died()
             await asyncio.sleep(0.2)
 
+    def press_before_music(self):
+        """Stop or Snooze pressed while the speakers were waking: 'stop', 'snooze' or None"""
+        if take_signal(settings.STOP_SIGNAL):
+            return 'stop'
+        if take_signal(settings.SNOOZE_SIGNAL):
+            return 'snooze'
+        return None
+
     async def wait_out_snooze(self, until):
         """Wait out a snooze. True if Stop was pressed meanwhile."""
         while datetime.now() < until:
@@ -253,11 +324,15 @@ class AlarmTrigger:
         deadline = datetime.now() + timedelta(minutes=settings.ALARM_DURATION_MINUTES)
 
         try:
+            write_display("WAKE!")  # The button lights come on with the click
+            await self.wake_speakers()
             while True:
                 write_display("WAKE!")
-                await self.start_music()
-                outcome = await self.wait_for_press(deadline)
-                await self.stop_music()
+                outcome = self.press_before_music()
+                if outcome is None:
+                    await self.start_music()
+                    outcome = await self.wait_for_press(deadline)
+                    await self.stop_music()
                 if outcome == 'stop':
                     print("✋ Alarm stopped")
                     break
@@ -278,7 +353,9 @@ class AlarmTrigger:
         finally:
             await self.stop_music()
             write_display("")
-        print("✅ Alarm finished")
+            # Speakers stay on a while, in case of music while getting ready
+            self.speakers_off_at = datetime.now() + timedelta(seconds=settings.SPEAKER_OFF_DELAY_SECONDS)
+        print(f"✅ Alarm finished - speakers off at {self.speakers_off_at:%H:%M:%S} unless something plays")
 
     def check_clock(self):
         """There's no hardware clock: until NTP syncs, the time may be days off"""
@@ -293,11 +370,19 @@ class AlarmTrigger:
         print(f"   Snooze: {settings.SNOOZE_MINUTES} min, auto-stop: {settings.ALARM_DURATION_MINUTES} min, "
               f"late grace: {settings.LATE_GRACE_MINUTES} min")
         print(f"   Volume ramp: {settings.MIN_VOLUME}% to {settings.MAX_VOLUME}% over {settings.VOLUME_RAMP_SECONDS}s "
-              f"on {settings.AUDIO_CARD} ({'connected' if audio_device_present() else 'NOT CONNECTED'})")
+              f"on {settings.AUDIO_CARD} ({'awake' if audio_device_present() else 'in standby or unplugged'})")
+        relay = speakers.is_on()
+        print(f"   Speakers: relay on GPIO {settings.SPEAKER_TRIGGER_GPIO} is "
+              f"{ {True: 'on', False: 'off', None: 'UNREADABLE'}[relay] }, "
+              f"settle {settings.SPEAKER_SETTLE_SECONDS}s, off {settings.SPEAKER_OFF_DELAY_SECONDS}s after an alarm")
         self.check_clock()
         # A ring never survives a restart, so a WAKE! or SNZ left by a power cut
         # is stale; clear it so the button lights don't show it all night
         write_display("")
+        # Speakers left on by a crash mid-alarm go off after the usual delay
+        if relay:
+            self.speakers_off_at = datetime.now() + timedelta(seconds=settings.SPEAKER_OFF_DELAY_SECONDS)
+            print(f"🔈 Speakers were left on - off at {self.speakers_off_at:%H:%M:%S} unless something plays")
 
         while True:
             try:
@@ -313,6 +398,7 @@ class AlarmTrigger:
                     self.mark_handled(alarm_key, 'missed')
                 else:
                     self.discard_stray_presses()
+                    self.speakers_off_when_due()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -322,12 +408,17 @@ class AlarmTrigger:
             await asyncio.sleep(settings.CHECK_INTERVAL)
 
     async def test_music(self, seconds):
-        """Play the wake-up music through the alarm path, with the volume ramp"""
+        """Play the wake-up music through the alarm path, with the speaker wake-up
+        and the volume ramp. Speakers that were off go off again afterwards."""
+        was_on = speakers.is_on()
         try:
+            await self.wake_speakers()
             await self.start_music()
             await asyncio.sleep(seconds)
         finally:
             await self.stop_music()
+            if was_on is False:
+                speakers.switch(False)
         print("✅ Music test done")
 
 

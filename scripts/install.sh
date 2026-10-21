@@ -8,6 +8,7 @@
 #   /etc/systemd/system/  <- services/*.service
 #   /etc/udev/rules.d/99-monty-buttons.rules <- firmware/button/99-monty-buttons.rules
 #   PulseAudio masked for all users (undo: systemctl --global unmask pulseaudio.service pulseaudio.socket)
+# alarm-trigger.service runs with the gpio group (SupplementaryGroups) to click the speaker relay.
 set -e
 cd "$(dirname "$0")/.."
 

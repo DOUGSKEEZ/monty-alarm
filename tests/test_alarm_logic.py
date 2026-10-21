@@ -95,6 +95,32 @@ class ButtonLightTests(unittest.TestCase):
             self.assertEqual(rgb, (0, 0, 0))
 
 
+class SpeakerRelayTests(unittest.TestCase):
+    """pinctrl's lines as seen on the Pi on 2026-10-21"""
+
+    def test_driven_low_is_on(self):
+        from speakers import relay_on_from_pinctrl
+        self.assertTrue(relay_on_from_pinctrl(' 4: op -- pu | lo // GPIO4 = output'))
+
+    def test_released_input_is_off(self):
+        from speakers import relay_on_from_pinctrl
+        self.assertFalse(relay_on_from_pinctrl(' 4: ip    pu | hi // GPIO4 = input'))
+
+    def test_driven_high_is_off(self):
+        from speakers import relay_on_from_pinctrl
+        self.assertFalse(relay_on_from_pinctrl(' 4: op dh pu | hi // GPIO4 = output'))
+
+    def test_garbage_is_off(self):
+        from speakers import relay_on_from_pinctrl
+        self.assertFalse(relay_on_from_pinctrl(''))
+
+    def test_settle_covers_the_amp(self):
+        # The ZA3 unmutes ~6 s after the click and the ZD3 appears at ~4 s;
+        # pianobar takes ~1 s more, so less than 2 s of settle clips intros
+        self.assertGreaterEqual(settings.SPEAKER_SETTLE_SECONDS, 2)
+        self.assertGreater(settings.SPEAKER_WAIT_SECONDS, 5)
+
+
 class PushReceiverTests(unittest.TestCase):
     def setUp(self):
         import server

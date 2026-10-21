@@ -60,6 +60,15 @@ VOLUME_RAMP_SECONDS = 10
 DEFAULT_MP3 = "THE_HIT.mp3"  # MP3 mode with no track chosen, and the fallback when Pandora fails
 PANDORA_START_SECONDS = 20   # Fall back to the MP3 if Pandora hasn't started a song by then
 
+# Speaker power (core/speakers.py): a relay on this GPIO feeds 12 V into the
+# ZD3's Trigger In at alarm time, and the ZD3 passes it on to the ZA3. Measured
+# 2026-10-21: the ZD3 appears on USB ~4 s after the click and the ZA3 lets sound
+# through ~6 s after it, so the music starts ~8 s after the click.
+SPEAKER_TRIGGER_GPIO = 4          # BCM numbering: header pin 7
+SPEAKER_WAIT_SECONDS = 20         # Give up waiting for the ZD3 to wake after this (then play anyway)
+SPEAKER_SETTLE_SECONDS = 3        # From the ZD3 appearing to the music starting, so the amp is unmuted
+SPEAKER_OFF_DELAY_SECONDS = 300   # Keep the speakers on this long after the alarm ends (longer while the Pi plays)
+
 # Alarm timing
 CHECK_INTERVAL = 1           # Seconds between schedule checks
 LATE_GRACE_MINUTES = 15      # Still ring if the Pi was down at alarm time and is back within this

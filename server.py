@@ -17,6 +17,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'core'))
 import settings
+import speakers
 from statefiles import read_json, write_json, parse_iso
 
 VERSION = '2.0.0'
@@ -133,10 +134,12 @@ def health_check():
             'wakeUpTime': state.get('wakeUpTime'),
             'nextAlarm': state.get('nextAlarm')
         },
-        # The alarm is silent without the amp, so say whether it's there
+        # The alarm is silent without the amp, so say whether it's there. The ZD3
+        # is off USB in standby until the speaker relay wakes it at alarm time.
         'audio': {
             'card': settings.AUDIO_CARD,
-            'present': Path(f'/proc/asound/{settings.AUDIO_CARD}').exists()
+            'present': Path(f'/proc/asound/{settings.AUDIO_CARD}').exists(),
+            'speakersOn': speakers.is_on()
         }
     })
 
