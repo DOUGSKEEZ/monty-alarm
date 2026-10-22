@@ -72,6 +72,13 @@ PIANOBAR_CTL = Path.home() / ".config/pianobar/ctl"  # pianobar's control FIFO (
 WAKE_MODES = ("pianobar", "mp3", "fm")
 FM_AVAILABLE = False              # No FM module yet: "fm" plays Pandora
 
+# Alarm songs from Monty's Jukebox library (core/monty_songs.py). When a push
+# names a song the Pi doesn't have, server.py downloads it here ahead of time;
+# the alarm only ever plays files already on the SD card.
+MONTY_SONGS_DIR = MUSIC_DIR / "from-monty"
+MONTY_SONGS_MAX_MB = 2048         # Keep this much; the least recently chosen song goes first
+MIN_FREE_MB = 1024                # Never download into the SD card's last GB
+
 # Speaker power (core/speakers.py): a relay on this GPIO feeds 12 V into the
 # ZD3's Trigger In at alarm time, and the ZD3 passes it on to the ZA3. Measured
 # 2026-10-21: the ZD3 appears on USB ~4 s after the click and the ZA3 lets sound

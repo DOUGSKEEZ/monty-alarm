@@ -5,16 +5,22 @@ Run on the Pi with the venv (it has Flask):
     venv/bin/python -m unittest discover -s tests -v
 """
 
+import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'core'))
 sys.path.insert(0, str(ROOT))
 
+import monty_songs
 import settings
 import statefiles
 from alarm_trigger import alarm_action, PIANOBAR_SONG, song_log_entry, log_song
@@ -185,10 +191,19 @@ class WakeupSettingsTests(unittest.TestCase):
         from statefiles import clean_wakeup_settings
         for bad in ({'snoozeMinutes': 0}, {'snoozeMinutes': 31}, {'snoozeMinutes': '12'},
                     {'snoozeMinutes': 12.5}, {'snoozeMinutes': True}, {'wakeMode': 'radio'},
-                    {'mp3Track': '../secret.mp3'}, {'mp3Track': 'song.wav'}, {'mp3Track': 7}):
+                    {'mp3Track': '../secret.mp3'}, {'mp3Track': 'song.wav'}, {'mp3Track': 7},
+                    {'mp3Track': 'a\\b.mp3'}, {'mp3Track': '.hidden.mp3'}, {'mp3Track': 'x\0.mp3'}):
             clean, warnings = clean_wakeup_settings(bad)
             self.assertEqual(set(clean.values()), {None}, bad)
             self.assertEqual(len(warnings), 1, bad)
+
+    def test_real_library_names_are_kept(self):
+        from statefiles import clean_wakeup_settings
+        for name in ("Kenny Loggins - I'm Alright.mp3", 'Oliver Tree & Robin Schulz - Miss You.mp3',
+                     'St-Amour - night lights 🎷.mp3', 'Running Away is Easy - 𝙏𝙞𝙢𝙚 𝙈𝙤𝙫𝙚𝙨 𝙎𝙡𝙤𝙬.mp3',
+                     'Tiësto - Rule The World (Tears For Fears, NIIKO X SWAE, GUDFELLA).mp3', 'ART! - Jazzy Liquid DnB.mp3'):
+            clean, warnings = clean_wakeup_settings({'mp3Track': name})
+            self.assertEqual((clean['mp3Track'], warnings), (name, []))
 
     def test_monty_wins_then_the_pi_then_settings(self):
         from statefiles import resolve_wakeup
@@ -284,16 +299,18 @@ class PushReceiverTests(unittest.TestCase):
 
     def test_wakeup_options(self):
         music = Path(self.tmp.name) / 'music'
-        music.mkdir()
-        for name in ('B.mp3', 'A.mp3', 'notes.txt'):
+        (music / 'from-monty').mkdir(parents=True)
+        for name in ('B.mp3', 'A.mp3', 'notes.txt', 'from-monty/c from Monty.mp3', 'from-monty/d.mp3.part'):
             (music / name).touch()
-        original = settings.MUSIC_DIR
-        settings.MUSIC_DIR = music
+        originals = settings.MUSIC_DIR, settings.MONTY_SONGS_DIR
+        settings.MUSIC_DIR, settings.MONTY_SONGS_DIR = music, music / 'from-monty'
         try:
             options = self.client.get('/api/wakeup/options').get_json()
         finally:
-            settings.MUSIC_DIR = original
-        self.assertEqual(options['mp3Tracks'], ['A.mp3', 'B.mp3'])
+            settings.MUSIC_DIR, settings.MONTY_SONGS_DIR = originals
+        # Songs from Monty by bare name, as Monty names them; never a partial download
+        self.assertEqual(options['mp3Tracks'], ['A.mp3', 'B.mp3', 'c from Monty.mp3'])
+        self.assertTrue(options['fetchesFromMonty'])
         self.assertTrue(options['modes']['mp3']['available'])
         self.assertEqual(options['modes']['fm']['available'], settings.FM_AVAILABLE)
         self.assertIn('reason', options['modes']['fm'])
@@ -303,6 +320,126 @@ class PushReceiverTests(unittest.TestCase):
         audio = self.client.get('/api/health').get_json()['audio']
         self.assertEqual(audio['card'], settings.AUDIO_CARD)
         self.assertIn('present', audio)
+
+
+class MontySongsTests(unittest.TestCase):
+    """Downloads from a stand-in for Monty's GET /api/jukebox/library/{name}/file"""
+    KENNY = "Kenny Loggins - I'm Alright.mp3"
+    SAX = 'St-Amour - night lights 🎷.mp3'
+
+    @classmethod
+    def setUpClass(cls):
+        library = {cls.KENNY: b'ID3 kenny ' * 1000, cls.SAX: b'ID3 sax ' * 1000}
+        cls.library, cls.requests = library, []
+        requests = cls.requests
+
+        class Monty(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                name = urllib.parse.unquote(self.path[len('/api/jukebox/library/'):-len('/file')])
+                if name == 'cut-off.mp3':  # Promises 100 kB, sends 10 bytes and hangs up
+                    self.send_response(200)
+                    self.send_header('Content-Length', '100000')
+                    self.end_headers()
+                    self.wfile.write(b'x' * 10)
+                    return
+                if name not in library:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'audio/mpeg')
+                self.send_header('Content-Length', str(len(library[name])))
+                self.end_headers()
+                self.wfile.write(library[name])
+
+            def log_message(self, *args):
+                pass
+
+        cls.monty = ThreadingHTTPServer(('127.0.0.1', 0), Monty)
+        threading.Thread(target=cls.monty.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.monty.shutdown()
+        cls.monty.server_close()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        music = Path(self.tmp.name) / 'music'
+        music.mkdir()
+        (music / settings.DEFAULT_MP3).write_bytes(b'ID3 default')
+        self.originals = (settings.MUSIC_DIR, settings.MONTY_SONGS_DIR, settings.MONTY_URL,
+                          settings.MONTY_SONGS_MAX_MB, settings.ALARM_STATE_FILE)
+        settings.MUSIC_DIR, settings.MONTY_SONGS_DIR = music, music / 'from-monty'
+        settings.MONTY_URL = f'http://127.0.0.1:{self.monty.server_port}'
+        settings.ALARM_STATE_FILE = Path(self.tmp.name) / 'alarm_state.json'
+        self.requests.clear()
+
+    def tearDown(self):
+        (settings.MUSIC_DIR, settings.MONTY_SONGS_DIR, settings.MONTY_URL,
+         settings.MONTY_SONGS_MAX_MB, settings.ALARM_STATE_FILE) = self.originals
+        self.tmp.cleanup()
+
+    def test_names_are_encoded_and_saved_as_monty_names_them(self):
+        for name in (self.KENNY, self.SAX):
+            ok, message = monty_songs.download(name)
+            self.assertTrue(ok, message)
+            self.assertEqual(monty_songs.track_path(name).read_bytes(), self.library[name])
+        self.assertEqual(self.requests[0], '/api/jukebox/library/Kenny%20Loggins%20-%20I%27m%20Alright.mp3/file')
+        self.assertEqual(monty_songs.mp3_to_play(self.KENNY), (settings.MONTY_SONGS_DIR / self.KENNY, None))
+
+    def test_path_escapes_are_refused_without_asking_monty(self):
+        for bad in ('../alarm_state.json', '../../x.mp3', 'a/b.mp3', 'a\\b.mp3', '.hidden.mp3', 'x\0.mp3', 'song.wav'):
+            self.assertFalse(monty_songs.download(bad)[0], bad)
+            self.assertIsNone(monty_songs.track_path(bad), bad)
+        self.assertEqual(self.requests, [])
+
+    def test_failed_download_plays_the_default(self):
+        ok, why = monty_songs.download('Not In The Library.mp3')
+        self.assertFalse(ok)
+        self.assertIn('404', why)
+        path, problem = monty_songs.mp3_to_play('Not In The Library.mp3')
+        self.assertEqual(path, settings.MUSIC_DIR / settings.DEFAULT_MP3)
+        self.assertIn("isn't on the Pi", problem)
+
+    def test_partial_download_is_never_played(self):
+        ok, why = monty_songs.download('cut-off.mp3')
+        self.assertFalse(ok)
+        self.assertIn('10 of 100000', why)
+        self.assertIsNone(monty_songs.track_path('cut-off.mp3'))
+        self.assertEqual(list(settings.MONTY_SONGS_DIR.iterdir()), [])  # No .part left behind
+
+    def test_cleanup_keeps_the_alarms_song_and_the_newest(self):
+        folder = settings.MONTY_SONGS_DIR
+        folder.mkdir()
+        now = time.time()
+        for age, name in enumerate(('newest.mp3', 'newer.mp3', 'older.mp3', 'alarm song.mp3')):
+            (folder / name).write_bytes(b'x' * monty_songs.MB)
+            os.utime(folder / name, (now - age * 60, now - age * 60))
+        (folder / 'stale.mp3.part').touch()
+        os.utime(folder / 'stale.mp3.part', (now - 7200, now - 7200))
+        (folder / 'live.mp3.part').touch()  # A download in progress
+        settings.MONTY_SONGS_MAX_MB = 2
+
+        deleted = monty_songs.clean_up(keep={'alarm song.mp3'})
+        self.assertEqual(deleted, ['newer.mp3', 'older.mp3'])
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['alarm song.mp3', 'live.mp3.part', 'newest.mp3'])
+
+    def test_push_downloads_a_missing_song_once(self):
+        import server
+        client = server.app.test_client()
+        push = {'timestamp': '2026-10-22T06:00:00.000Z', 'action': 'schedule_set',
+                'schedule': {'hasAlarm': True, 'nextAlarm': '2026-10-23T14:00:00.000Z',
+                             'scheduledAt': '2026-10-22T06:00:00.000Z', 'wakeMode': 'mp3', 'mp3Track': self.KENNY}}
+        self.assertTrue(client.post('/api/schedule/update', json=push).get_json()['success'])
+        for thread in threading.enumerate():
+            if thread.name == 'monty-song':
+                thread.join(5)
+        self.assertIsNotNone(monty_songs.track_path(self.KENNY))
+        # The hourly sync re-pushes the same song: already here, so no second download
+        client.post('/api/schedule/update', json=push)
+        self.assertEqual(len(self.requests), 1)
+        self.assertIsNone(server.want_song(None))
 
 
 if __name__ == '__main__':

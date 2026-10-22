@@ -11,6 +11,9 @@ wakeup_config.json
 *.tmp
 config/
 
+# Alarm songs downloaded from Monty's library (core/monty_songs.py): Doug's music, not the repo's
+music/from-monty/
+
 # Signal files (runtime communication)
 signals/*
 !signals/.gitkeep

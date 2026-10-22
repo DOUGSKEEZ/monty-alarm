@@ -28,6 +28,7 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import monty_songs
 import pianobar
 import settings
 import speakers
@@ -257,12 +258,12 @@ class AlarmTrigger:
         return song_started.is_set()
 
     async def start_mp3(self, track):
-        path = settings.MUSIC_DIR / track
-        if not path.exists():
-            print(f"   ❌ MP3 not found: {path}")
-            path = settings.MUSIC_DIR / settings.DEFAULT_MP3
+        # Only what's already on the SD card: a song from Monty is downloaded when it's pushed
+        path, problem = monty_songs.mp3_to_play(track)
+        if problem:
+            print(f"   ❌ {problem} (a song from Monty that hasn't downloaded?) - playing {path.name}")
         print(f"   Playing MP3: {path.name}")
-        log_song(f"MP3 {path.name}")
+        log_song(f"MP3 {path.name}" + (f" ({problem})" if problem else ""))
         await self.start_player('mpg123', 'mpg123', '-q', '-o', 'alsa', '--loop', '-1', str(path))
 
     async def prepare_volume(self):

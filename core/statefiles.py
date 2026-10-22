@@ -58,6 +58,13 @@ def pushed_alarm():
         return None, None
 
 
+def plain_mp3_name(name):
+    """True for a bare .mp3 file name. It becomes MUSIC_DIR / name, so no folders,
+    no hidden files. Anything else goes: Doug's songs have apostrophes, &, accents, emoji."""
+    return (isinstance(name, str) and name.lower().endswith('.mp3') and not name.startswith('.')
+            and not any(c in name for c in '/\\\0'))
+
+
 def clean_wakeup_settings(schedule):
     """The wake-up settings in a Monty push, checked. Returns (settings, warnings):
     wakeMode, mp3Track and snoozeMinutes, each None when missing or invalid.
@@ -70,10 +77,9 @@ def clean_wakeup_settings(schedule):
         mode = None
     clean['wakeMode'] = mode
 
-    # It becomes MUSIC_DIR / name, so only a plain file name will do
+    # A song on the Pi, or one in Monty's library for server.py to download
     track = schedule.get('mp3Track')
-    if track is not None and not (isinstance(track, str) and track.lower().endswith('.mp3')
-                                  and '/' not in track and '\\' not in track and not track.startswith('.')):
+    if track is not None and not plain_mp3_name(track):
         warnings.append(f"bad mp3Track {track!r}")
         track = None
     clean['mp3Track'] = track

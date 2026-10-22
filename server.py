@@ -16,6 +16,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'core'))
+import monty_songs
 import settings
 import speakers
 from statefiles import read_json, write_json, parse_iso, clean_wakeup_settings, load_wakeup_config
@@ -36,6 +37,10 @@ logger = logging.getLogger('monty-alarm-server')
 
 # Flask serves requests on threads; Monty's clear and set can arrive together
 state_lock = threading.Lock()
+
+# Songs being downloaded from Monty, so a sync's re-push doesn't start a second copy
+downloads_lock = threading.Lock()
+downloading = set()
 
 def signal_handler(sig, frame):
     """Handle shutdown gracefully"""
@@ -111,6 +116,39 @@ def request_sync():
     except Exception as e:
         logger.warning(f"⚠️ Could not ask Monty to sync ({url}): {e}")
         return False
+
+def fetch_song(name):
+    """Background: copy an alarm song from Monty's library onto the SD card"""
+    try:
+        logger.info(f"⬇️ Downloading '{name}' from Monty for the alarm")
+        ok, message = monty_songs.download(name)
+        if not ok:
+            logger.warning(f"⚠️ Couldn't download '{name}' from Monty: {message}. Trying again at the "
+                           f"next sync; until then an MP3 alarm plays {settings.DEFAULT_MP3}")
+            return
+        logger.info(f"✅ Downloaded '{name}': {message}")
+        for gone in monty_songs.clean_up(keep={name, load_state().get('mp3Track')}):
+            logger.info(f"🧹 Deleted '{gone}' to keep songs from Monty under {settings.MONTY_SONGS_MAX_MB} MB")
+    finally:
+        with downloads_lock:
+            downloading.discard(name)
+
+def want_song(name):
+    """A push named this track: download it if the Pi doesn't have it. Every sync
+    re-pushes the alarm, so a failed download is retried then. Returns the
+    download's thread, if one started."""
+    if name is None:
+        return None
+    if monty_songs.track_path(name):
+        monty_songs.mark_chosen(name)
+        return None
+    with downloads_lock:
+        if name in downloading:
+            return None
+        downloading.add(name)
+    thread = threading.Thread(target=fetch_song, args=(name,), name='monty-song', daemon=True)
+    thread.start()
+    return thread
 
 def sync_loop():
     """Sync at startup, then hourly, so a missed push never leaves us on stale state"""
@@ -194,6 +232,9 @@ def update_schedule():
             })
             save_state(current_state)
 
+        # A song from Monty's library is fetched now, never at ring time
+        want_song(wakeup['mp3Track'])
+
         # Update physical display
         update_alarm_display(current_state)
 
@@ -214,8 +255,9 @@ def update_schedule():
 
 @app.route('/api/wakeup/options', methods=['GET'])
 def wakeup_options():
-    """What the Pi can play, for Monty's alarm popup"""
-    tracks = sorted(p.name for p in settings.MUSIC_DIR.glob('*.mp3'))
+    """What the Pi can play, for Monty's alarm popup. fetchesFromMonty tells the
+    popup it can offer Monty's whole library: the Pi downloads what it's sent."""
+    tracks = monty_songs.all_tracks()
     local = load_wakeup_config()
     low, high = settings.SNOOZE_MINUTES_RANGE
 
@@ -229,6 +271,7 @@ def wakeup_options():
             'fm': option('FM radio', settings.FM_AVAILABLE, "FM radio isn't built yet"),
         },
         'mp3Tracks': tracks,
+        'fetchesFromMonty': True,
         'defaults': {'wakeMode': local['mode'], 'mp3Track': local['mp3_track'],
                      'snoozeMinutes': settings.SNOOZE_MINUTES},
         'snoozeMinutes': {'min': low, 'max': high},

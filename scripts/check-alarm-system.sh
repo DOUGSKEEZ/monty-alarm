@@ -67,7 +67,7 @@ else
 fi
 command -v pianobar >/dev/null && ok "pianobar installed" || bad "pianobar not installed"
 command -v mpg123 >/dev/null && ok "mpg123 installed" || bad "mpg123 not installed"
-python3 core/wakeup_mode_manager.py status | sed -n '3,4p' | sed 's/^/   /'
+python3 core/wakeup_mode_manager.py status | sed -n '3,5p' | sed 's/^/   /'
 
 echo
 echo "4. Clock"
@@ -79,6 +79,7 @@ curl -s -m 3 -o /dev/null http://localhost:5000/api/health && ok "Local API answ
 python3 - <<'PY'
 import sys
 sys.path.insert(0, 'core')
+import monty_songs
 import settings
 from statefiles import (pushed_alarm, describe_alarm, read_json, pushed_wakeup_settings,
                         resolve_wakeup, describe_wakeup, load_wakeup_config)
@@ -86,7 +87,11 @@ _, at = pushed_alarm()
 pushed = read_json(settings.ALARM_STATE_FILE, {}) or {}
 print(f"   Pushed by Monty: {describe_alarm(at) if at else 'no alarm'} (last update {pushed.get('lastUpdate')})")
 if at:
-    print(f"   Wake-up: {describe_wakeup(resolve_wakeup(pushed_wakeup_settings(), load_wakeup_config()))}")
+    wake = resolve_wakeup(pushed_wakeup_settings(), load_wakeup_config())
+    print(f"   Wake-up: {describe_wakeup(wake)}")
+    path, problem = monty_songs.mp3_to_play(wake['mp3_track'])
+    if problem:
+        print(f"   ⚠️ {problem} (still downloading from Monty?): an MP3 would play {path.name}")
 handled = read_json(settings.TRIGGER_STATE_FILE, {}) or {}
 if handled:
     print(f"   Last alarm handled: {handled.get('handled_alarm')} ({handled.get('result')} at {handled.get('at')})")

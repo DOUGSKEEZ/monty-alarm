@@ -27,7 +27,7 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 
 | Service | Runs | Job |
 | --- | --- | --- |
-| `monty-alarm-api.service` | `server.py` (Flask, venv) | Receives Monty's pushes, writes `alarm_state.json`, asks Monty to sync, serves `/api/health` and `/api/wakeup/options` |
+| `monty-alarm-api.service` | `server.py` (Flask, venv) | Receives Monty's pushes, writes `alarm_state.json`, asks Monty to sync, downloads alarm songs from Monty, serves `/api/health` and `/api/wakeup/options` |
 | `alarm-trigger.service` | `core/alarm_trigger.py` | Rings at the alarm time, wakes the speakers, plays music, ramps volume, handles snooze/stop |
 | `alarm-buttons.service` | `core/alarm_button_handler.py` | Reads the buttons and drops signal files for the trigger |
 | `button-leds.service` | `core/button_leds.py watch` | Sets the button lights from the alarm's state. Separate, so a light problem can't stop the alarm |
@@ -50,7 +50,7 @@ A button that's unplugged and plugged back in starts dark and gets its light bac
 Presses while no alarm is ringing are ignored, so they never carry over to the next alarm. The buttons are found by USB port (`/dev/input/by-path`), because both are the same model and `/dev/input/by-id` can't tell them apart: **if you swap the plugs, the buttons swap**.
 
 ## How an alarm runs
-1. Monty pushes `nextAlarm` (UTC), with the alarm popup's `wakeMode` (`pianobar`, `mp3` or `fm`), `mp3Track` and `snoozeMinutes`. `server.py` stores them, ignoring any push older than the one it already has (Monty sends clear-then-set without waiting). An invalid setting is dropped with a warning and the Pi's default applies: `wakeup_config.json`, then `settings.py`. Monty's "Shades only" arrives as no alarm at all.
+1. Monty pushes `nextAlarm` (UTC), with the alarm popup's `wakeMode` (`pianobar`, `mp3` or `fm`), `mp3Track` and `snoozeMinutes`. `server.py` stores them, ignoring any push older than the one it already has (Monty sends clear-then-set without waiting). An invalid setting is dropped with a warning and the Pi's default applies: `wakeup_config.json`, then `settings.py`. Monty's "Shades only" arrives as no alarm at all. A song from Monty's library is downloaded straight away (see Alarm songs).
 2. The trigger rings once the alarm time is reached, up to 15 minutes late. Older alarms are logged as missed. Each alarm is remembered in `trigger_state.json` by its `nextAlarm` value, so it never rings twice and several alarms a day work.
 3. The settings are fixed for this alarm when it starts ringing (Monty clears its one-shot wake-up afterwards). The speaker relay clicks on (see Speaker power), and the music starts about 8 s later. FM isn't built yet, so `fm` plays Pandora.
 4. The music starts at 10% and ramps to 35% over 10 s (the `Alarm` control on the ZD3).
@@ -58,6 +58,16 @@ Presses while no alarm is ringing are ignored, so they never carry over to the n
 6. The speakers stay on through snoozes and go back to standby 5 minutes after the alarm ends.
 
 Monty runs its own shade scenes at the same time; the Pi doesn't trigger them. Snooze is Pi-only.
+
+## Alarm songs
+The alarm's MP3 can be one of the Pi's own tracks in `music/` (`Beethoven.mp3`, and `THE_HIT.mp3`, the default) or any song in Monty's Jukebox library. `/api/wakeup/options` says `fetchesFromMonty: true`, so Monty's popup offers its whole library.
+
+- **Downloaded ahead, never at ring time.** When a push names a song the Pi doesn't have, `server.py` downloads it from Monty (`GET /api/jukebox/library/{name}/file`) in the background, into `music/from-monty/`. A failed download is retried at the next sync (at boot and hourly), with a warning in the journal each time. The MP3 is also what plays when Pandora fails, so it must not depend on the network at 7am.
+- **Never half a song.** A download goes to `<name>.part` and is renamed only once every byte Monty promised has arrived.
+- **At ring time** the alarm plays the song if it's on the SD card, and otherwise `THE_HIT.mp3`, saying why in the journal and in `songs.log`.
+- **Room on the SD card.** Songs from Monty are kept up to 2 GB (`settings.MONTY_SONGS_MAX_MB`); past that, the least recently chosen are deleted. The next alarm's song and the Pi's own tracks never are. Nothing downloads into the card's last GB (`MIN_FREE_MB`).
+- **File names** are Monty's, as they are: spaces, apostrophes, `&`, accents and emoji all work. Only a bare `.mp3` name is accepted, never a folder or a hidden file (`statefiles.plain_mp3_name`).
+- `music/from-monty/` is in `.gitignore`: it's Doug's music, not the repo's. All of this is in `core/monty_songs.py`.
 
 ## Speaker power
 The ZD3 and ZA3 sit in standby until an alarm. Relay 1 of an HL-52S module (IN1 on GPIO 4, header pin 7, active-low) switches 12 V from an MT3608 boost module (powered from a Pi USB port, set to 12.0 V) into the ZD3's 12 V Trigger In; the ZD3's Trigger Out wakes the ZA3. The ZD3 ignores 5 V. Wiring: relay VCC to pin 4, GND to pin 6, IN1 to pin 7; MT3608 OUT+ to the relay's COM; the bottom screw (NO) to the 3.5 mm plug's tip, Pi pin 14 to its sleeve. Leave the top screw (NC) empty: it carries 12 V while the relay is off.
@@ -103,7 +113,8 @@ python3 core/pianobar.py send n
 # Wake-up music
 python3 core/wakeup_mode_manager.py                 # status and help
 python3 core/wakeup_mode_manager.py mode pianobar   # or: mp3, fm (fm plays Pandora for now)
-python3 core/wakeup_mode_manager.py select THE_HIT.mp3
+python3 core/wakeup_mode_manager.py list            # the Pi's own tracks, then songs downloaded from Monty
+python3 core/wakeup_mode_manager.py select THE_HIT.mp3   # the Pi's own tracks only
 python3 core/wakeup_mode_manager.py add ~/song.mp3
 python3 core/wakeup_mode_manager.py test 20         # play 20 s through the alarm's audio path, waking the speakers first
 
@@ -131,7 +142,8 @@ sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo s
 | `songs.log` | Every song the alarm played, one dated line each, with the station, thumbs and snoozes (appended by the trigger) |
 | `signals/alarm_snooze`, `signals/alarm_stop` | One-shot button signals |
 | `signals/alarm_display.txt` | `WAKE!`, `SNZ HH:MM` or empty: a stand-in until there's a display |
-| `music/` | MP3s |
+| `music/` | The Pi's own MP3s |
+| `music/from-monty/` | Alarm songs downloaded from Monty's library (not in git, up to 2 GB) |
 | `firmware/button/` | The buttons' firmware, its udev rule and how to flash it |
 
 ## Requirements

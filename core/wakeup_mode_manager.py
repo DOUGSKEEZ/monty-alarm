@@ -4,6 +4,8 @@ Wake-Up Mode Manager for Monty Alarm Clock
 Chooses what the alarm plays and manages the MP3 library.
 Everything is kept in wakeup_config.json, which alarm_trigger.py reads at alarm time.
 These are the Pi's defaults: whatever Monty sends with an alarm (its alarm popup) wins.
+select only takes the Pi's own tracks in music/: songs downloaded from Monty
+(music/from-monty/) come and go.
 
   python3 core/wakeup_mode_manager.py                  # status
   python3 core/wakeup_mode_manager.py mode <pianobar|mp3|fm>
@@ -18,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import monty_songs
 import settings
 from statefiles import read_json, write_json, load_wakeup_config, pushed_wakeup_settings
 
@@ -41,13 +44,17 @@ def list_tracks():
 def show_status():
     config = load_wakeup_config()
     track = settings.MUSIC_DIR / config['mp3_track']
+    songs, mb = monty_songs.usage()
     print("🎵 Wake-Up Mode Manager")
     print("=" * 40)
     print(f"Mode:      {config['mode']} - {MODES.get(config['mode'], 'unknown')}")
     print(f"MP3 track: {config['mp3_track']}{'' if track.exists() else '  ❌ FILE NOT FOUND'}")
+    print(f"Songs downloaded from Monty: {songs} ({mb:.0f} of {settings.MONTY_SONGS_MAX_MB} MB)")
     from_monty = {k: v for k, v in pushed_wakeup_settings().items() if v is not None}
     if from_monty:
         print(f"From Monty for the next alarm (wins over the above): {from_monty}")
+        if from_monty.get('mp3Track') and not monty_songs.track_path(from_monty['mp3Track']):
+            print(f"  ⚠️ {from_monty['mp3Track']} isn't on the Pi yet: an MP3 alarm would play {settings.DEFAULT_MP3}")
     print(__doc__.split("\n\n", 1)[1].rstrip())
 
 
@@ -100,6 +107,11 @@ if __name__ == "__main__":
         current = load_wakeup_config()['mp3_track']
         for name in list_tracks():
             print(f"{'→' if name == current else ' '} {name}")
+        downloaded = sorted(p.name for p in settings.MONTY_SONGS_DIR.glob("*.mp3"))
+        if downloaded:
+            print("Downloaded from Monty for its alarms (deleted when space is needed):")
+            for name in downloaded:
+                print(f"  {name}")
     elif command == "select" and len(args) > 1:
         sys.exit(select_track(args[1]))
     elif command == "add" and len(args) > 1:
