@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 import settings
-from statefiles import read_display
+from statefiles import read_display, take_signal
 
 VENDOR_ID, PRODUCT_ID = 0x1209, 0x0001   # pid.codes test PID, see firmware/button/src/config.h
 PRODUCT_NAME = "Monty Alarm Button"
@@ -118,6 +118,8 @@ def watch():
     print(f"💡 Button lights: Snooze on USB {settings.SNOOZE_PORT}, Check on USB {settings.CHECK_PORT}")
 
     state, stopped_until = None, 0.0
+    flash_signals = {"snooze": settings.SNOOZE_FLASH_SIGNAL, "check": settings.CHECK_FLASH_SIGNAL}
+    flash_until = {role: 0.0 for role in flash_signals}
     shown = {}       # port -> (device node, look) last sent; a replugged pad gets a new node
     failing = set()  # ports whose last request failed, so each failure is logged once
     while True:
@@ -130,12 +132,17 @@ def watch():
                 print(f"💡 Alarm {new_state}")
             state = new_state
         look_name = "stopped" if state == "idle" and time.monotonic() < stopped_until else state
+        for role, flash_signal in flash_signals.items():  # A skip or thumbs down reached pianobar
+            if take_signal(flash_signal):
+                flash_until[role] = time.monotonic() + settings.BUTTON_FLASH_SECONDS
 
         for port, dev in find_pads().items():
             role = roles.get(port)
             if not role:
                 continue
             look = settings.BUTTON_LIGHTS[look_name][role]
+            if time.monotonic() < flash_until[role]:
+                look = settings.BUTTON_FLASH_LIGHT
             try:
                 sent = (device_node(dev), look)
                 if shown.get(port) == sent:

@@ -35,8 +35,8 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 All four run as user `pi`. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
 
 ## Buttons
-- **Snooze** (USB port 1.4): press to snooze 9 minutes. Press as often as you like.
-- **Check** (USB port 1.3): tap to log the next alarm to the journal; **hold 1.1 s to stop** the alarm, including during a snooze.
+- **Snooze** (USB port 1.4): press to snooze 9 minutes. Press as often as you like. It snoozes when you let go. **Hold it 1.1 s while pianobar plays to skip to the next song** without a thumbs down; the Snooze light flickers blue. With no pianobar playing, a hold snoozes too.
+- **Check** (USB port 1.3): **hold 1.1 s to stop** the alarm, including during a snooze. **Tap while pianobar is playing for a thumbs down** on the Pandora song: Pandora won't play it on that station again, and pianobar skips to the next song. It works for the alarm's music and for a pianobar started by hand over SSH, because it goes through pianobar's control FIFO (`~/.config/pianobar/ctl`, see `core/pianobar.py`). The Check light flickers blue to confirm. A tap when pianobar isn't running logs the next alarm to the journal.
 
 Both buttons run our own firmware ([`firmware/button/`](firmware/button/README.md)): a plain keyboard that sends `a`, with an RGB light the Pi controls over USB. The lights follow the alarm (colours in `settings.BUTTON_LIGHTS`):
 
@@ -92,6 +92,9 @@ python3 core/button_leds.py set 1.4 0 200 0 breathe   # solid, breathe, blink or
 python3 core/speakers.py status
 python3 core/speakers.py on
 python3 core/speakers.py off
+
+# Commands to whichever pianobar is running (- thumbs down, + thumbs up, n next, p pause)
+python3 core/pianobar.py send n
 
 # Wake-up music
 python3 core/wakeup_mode_manager.py                 # status and help

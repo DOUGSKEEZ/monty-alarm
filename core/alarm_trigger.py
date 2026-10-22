@@ -25,6 +25,7 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pianobar
 import settings
 import speakers
 from statefiles import (read_json, write_json, pushed_alarm, load_wakeup_config,
@@ -56,6 +57,28 @@ def set_volume(percent):
 
 def audio_device_present():
     return Path(f'/proc/asound/{settings.AUDIO_CARD}').exists()
+
+
+def running(name):
+    return subprocess.run(['pgrep', '-x', name], capture_output=True).returncode == 0
+
+
+async def stop_all_players(names=('pianobar', 'mpg123'), timeout=2.0):
+    """The sound card takes one player at a time, and two pianobars would split
+    the control FIFO's commands. Ask every pianobar and mpg123 on the Pi to quit
+    (the alarm's or one started by hand), then force any that don't. -x matches
+    the program name exactly, so core/pianobar.py and editors are left alone."""
+    for name in names:
+        subprocess.run(['pkill', '-x', name], capture_output=True)
+    deadline = time.monotonic() + timeout
+    while any(running(name) for name in names):
+        if time.monotonic() >= deadline:
+            for name in names:
+                if running(name):
+                    print(f"   ⚠️ {name} didn't quit - killing it")
+                    subprocess.run(['pkill', '-KILL', '-x', name], capture_output=True)
+            return
+        await asyncio.sleep(0.1)
 
 
 class AlarmTrigger:
@@ -188,6 +211,10 @@ class AlarmTrigger:
     async def start_pandora(self):
         """Start pianobar and wait for its first song. False if none starts in time."""
         print("   Starting Pandora (pianobar)...")
+        try:
+            pianobar.ensure_fifo()  # So the Check button's thumbs down reaches it
+        except OSError as e:
+            print(f"   ⚠️ No pianobar control FIFO ({e}) - thumbs down won't work")
         song_started = asyncio.Event()
         await self.start_player('pianobar', 'pianobar', song_started=song_started)
         # Stop waiting early if pianobar quits (no network, bad login)
@@ -231,9 +258,8 @@ class AlarmTrigger:
     async def start_music(self):
         """Start the wake-up music for the configured mode, falling back to the MP3"""
         print("🎵 Starting wake-up music...")
-        # The sound card takes one player at a time, so the alarm wins over anything playing
-        subprocess.run(['pkill', '-x', 'pianobar'], capture_output=True)
-        subprocess.run(['pkill', '-x', 'mpg123'], capture_output=True)
+        # The alarm wins over anything playing
+        await stop_all_players()
         await self.prepare_volume()
 
         config = load_wakeup_config()

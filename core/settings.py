@@ -23,6 +23,8 @@ MUSIC_DIR = BASE_DIR / "music"
 SIGNALS_DIR = BASE_DIR / "signals"
 SNOOZE_SIGNAL = SIGNALS_DIR / "alarm_snooze"
 STOP_SIGNAL = SIGNALS_DIR / "alarm_stop"
+SNOOZE_FLASH_SIGNAL = SIGNALS_DIR / "snooze_flash"    # A skip reached pianobar: flash Snooze
+CHECK_FLASH_SIGNAL = SIGNALS_DIR / "check_flash"      # A thumbs down reached pianobar: flash Check
 DISPLAY_FILE = SIGNALS_DIR / "alarm_display.txt"      # WAKE!, SNZ HH:MM or empty, until there's a real display
 
 # Buttons. Both run our firmware (firmware/button/: USB 1209:0001, one keyboard
@@ -34,7 +36,7 @@ CHECK_PORT = "1.3"
 _USB_PORT = "/dev/input/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0"
 SNOOZE_DEVICES = [f"{_USB_PORT}:{SNOOZE_PORT}:1.0-event-kbd"]
 CHECK_DEVICES = [f"{_USB_PORT}:{CHECK_PORT}:1.0-event-kbd"]
-LONG_PRESS_SECONDS = 1.1  # Hold Check this long to stop the alarm
+LONG_PRESS_SECONDS = 1.1  # Hold Check this long to stop the alarm (or Snooze to skip a song)
 
 # Button lights, set by core/button_leds.py from the alarm's state. Each look is
 # ((R, G, B), effect): R, G, B are 0-255 and effect is "solid", "breathe",
@@ -48,6 +50,8 @@ BUTTON_LIGHTS = {
     "stopped":  {"snooze": _ENDED, "check": _ENDED},
 }
 STOPPED_LIGHT_SECONDS = 3  # How long "stopped" shows before the lights go off
+BUTTON_FLASH_LIGHT = ((0, 60, 255), "fast")  # Blue flicker: the button's pianobar command went through
+BUTTON_FLASH_SECONDS = 1
 
 # Audio goes straight to ALSA (see audio/asound.conf). PulseAudio is masked
 # by scripts/install.sh: it only ran while someone was logged in, and then it
@@ -59,6 +63,7 @@ MAX_VOLUME = 35           # Volume ramp end (%)
 VOLUME_RAMP_SECONDS = 10
 DEFAULT_MP3 = "THE_HIT.mp3"  # MP3 mode with no track chosen, and the fallback when Pandora fails
 PANDORA_START_SECONDS = 20   # Fall back to the MP3 if Pandora hasn't started a song by then
+PIANOBAR_CTL = Path.home() / ".config/pianobar/ctl"  # pianobar's control FIFO (core/pianobar.py)
 
 # Speaker power (core/speakers.py): a relay on this GPIO feeds 12 V into the
 # ZD3's Trigger In at alarm time, and the ZD3 passes it on to the ZA3. Measured

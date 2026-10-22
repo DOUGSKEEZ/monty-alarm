@@ -90,9 +90,52 @@ class ButtonLightTests(unittest.TestCase):
                 self.assertIn(effect, MODES, state)
                 self.assertTrue(all(0 <= c <= 255 for c in rgb), state)
 
+    def test_flash_is_a_valid_look(self):
+        from button_leds import MODES
+        rgb, effect = settings.BUTTON_FLASH_LIGHT
+        self.assertIn(effect, MODES)
+        self.assertTrue(all(0 <= c <= 255 for c in rgb))
+
     def test_idle_is_dark(self):
         for rgb, _ in settings.BUTTON_LIGHTS['idle'].values():
             self.assertEqual(rgb, (0, 0, 0))
+
+
+class PianobarFifoTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl = Path(self.tmp.name) / 'pianobar' / 'ctl'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_send_without_pianobar_is_false_not_a_hang(self):
+        import pianobar
+        pianobar.ensure_fifo(self.ctl)
+        self.assertFalse(pianobar.send('-', self.ctl))
+
+    def test_send_reaches_a_listening_pianobar(self):
+        import os
+        import pianobar
+        pianobar.ensure_fifo(self.ctl)
+        reader = os.open(self.ctl, os.O_RDONLY | os.O_NONBLOCK)  # Stands in for pianobar
+        try:
+            self.assertTrue(pianobar.send('-', self.ctl))
+            self.assertEqual(os.read(reader, 16), b'-')
+        finally:
+            os.close(reader)
+
+    def test_plain_file_is_replaced_by_a_fifo(self):
+        import stat
+        import pianobar
+        self.ctl.parent.mkdir(parents=True)
+        self.ctl.write_text('n\n')  # What "echo n > ctl" leaves when no FIFO exists
+        pianobar.ensure_fifo(self.ctl)
+        self.assertTrue(stat.S_ISFIFO(self.ctl.stat().st_mode))
+
+    def test_missing_fifo_is_false(self):
+        import pianobar
+        self.assertFalse(pianobar.send('-', self.ctl))
 
 
 class SpeakerRelayTests(unittest.TestCase):

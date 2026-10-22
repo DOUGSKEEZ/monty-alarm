@@ -9,6 +9,7 @@
 #   /etc/udev/rules.d/99-monty-buttons.rules <- firmware/button/99-monty-buttons.rules
 #   PulseAudio masked for all users (undo: systemctl --global unmask pulseaudio.service pulseaudio.socket)
 # alarm-trigger.service runs with the gpio group (SupplementaryGroups) to click the speaker relay.
+#   ~pi/.config/pianobar/ctl  <- a FIFO for pianobar commands (core/pianobar.py), created if missing
 set -e
 cd "$(dirname "$0")/.."
 
@@ -49,6 +50,9 @@ for unit in services/*.service; do
     install -m 644 "$unit" /etc/systemd/system/
     echo "Installed /etc/systemd/system/$(basename "$unit")"
 done
+
+# pianobar's control FIFO, so the buttons can send it commands (thumbs down)
+sudo -u pi -H python3 core/pianobar.py setup
 
 # Runtime files the services share (all run as pi)
 mkdir -p signals
