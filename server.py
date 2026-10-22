@@ -18,7 +18,7 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'core'))
 import settings
 import speakers
-from statefiles import read_json, write_json, parse_iso
+from statefiles import read_json, write_json, parse_iso, clean_wakeup_settings, load_wakeup_config
 
 VERSION = '2.0.0'
 
@@ -132,7 +132,10 @@ def health_check():
         'currentAlarm': {
             'hasAlarm': state.get('hasAlarm', False),
             'wakeUpTime': state.get('wakeUpTime'),
-            'nextAlarm': state.get('nextAlarm')
+            'nextAlarm': state.get('nextAlarm'),
+            'wakeMode': state.get('wakeMode'),
+            'mp3Track': state.get('mp3Track'),
+            'snoozeMinutes': state.get('snoozeMinutes')
         },
         # The alarm is silent without the amp, so say whether it's there. The ZD3
         # is off USB in standby until the speaker relay wakes it at alarm time.
@@ -157,6 +160,11 @@ def update_schedule():
         action = data.get('action', 'unknown')
         schedule = data.get('schedule') or {}
         event = event_time(data)
+        # wakeMode, mp3Track, snoozeMinutes from Monty's alarm popup. Bad values
+        # are dropped (the Pi's defaults apply) rather than refusing the alarm.
+        wakeup, problems = clean_wakeup_settings(schedule)
+        for problem in problems:
+            logger.warning(f"⚠️ Ignoring {problem} from Monty - the Pi's default applies")
 
         with state_lock:
             current_state = load_state()
@@ -181,7 +189,8 @@ def update_schedule():
                 'lastUpdate': data.get('timestamp', datetime.now().isoformat()),
                 'eventTime': event,
                 'action': action,
-                'daysUntilAlarm': schedule.get('daysUntilAlarm')
+                'daysUntilAlarm': schedule.get('daysUntilAlarm'),
+                **wakeup
             })
             save_state(current_state)
 
@@ -202,6 +211,28 @@ def update_schedule():
             'error': str(e),
             'receivedAt': datetime.now().isoformat()
         }), 500
+
+@app.route('/api/wakeup/options', methods=['GET'])
+def wakeup_options():
+    """What the Pi can play, for Monty's alarm popup"""
+    tracks = sorted(p.name for p in settings.MUSIC_DIR.glob('*.mp3'))
+    local = load_wakeup_config()
+    low, high = settings.SNOOZE_MINUTES_RANGE
+
+    def option(label, available, reason):
+        return {'available': available, 'label': label, **({} if available else {'reason': reason})}
+
+    return jsonify({
+        'modes': {
+            'pianobar': option('Pandora', True, None),
+            'mp3': option('MP3', bool(tracks), 'No MP3s on the Pi'),
+            'fm': option('FM radio', settings.FM_AVAILABLE, "FM radio isn't built yet"),
+        },
+        'mp3Tracks': tracks,
+        'defaults': {'wakeMode': local['mode'], 'mp3Track': local['mp3_track'],
+                     'snoozeMinutes': settings.SNOOZE_MINUTES},
+        'snoozeMinutes': {'min': low, 'max': high},
+    })
 
 @app.route('/api/schedule/current', methods=['GET'])
 def get_current_schedule():

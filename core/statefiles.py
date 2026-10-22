@@ -58,6 +58,61 @@ def pushed_alarm():
         return None, None
 
 
+def clean_wakeup_settings(schedule):
+    """The wake-up settings in a Monty push, checked. Returns (settings, warnings):
+    wakeMode, mp3Track and snoozeMinutes, each None when missing or invalid.
+    A null mp3Track is Monty's "Pi's default", so it isn't a warning."""
+    clean, warnings = {}, []
+
+    mode = schedule.get('wakeMode')
+    if mode is not None and mode not in settings.WAKE_MODES:
+        warnings.append(f"unknown wakeMode {mode!r}")
+        mode = None
+    clean['wakeMode'] = mode
+
+    # It becomes MUSIC_DIR / name, so only a plain file name will do
+    track = schedule.get('mp3Track')
+    if track is not None and not (isinstance(track, str) and track.lower().endswith('.mp3')
+                                  and '/' not in track and '\\' not in track and not track.startswith('.')):
+        warnings.append(f"bad mp3Track {track!r}")
+        track = None
+    clean['mp3Track'] = track
+
+    snooze = schedule.get('snoozeMinutes')
+    low, high = settings.SNOOZE_MINUTES_RANGE
+    if snooze is not None and not (type(snooze) is int and low <= snooze <= high):
+        warnings.append(f"snoozeMinutes {snooze!r} isn't a whole number from {low} to {high}")
+        snooze = None
+    clean['snoozeMinutes'] = snooze
+    return clean, warnings
+
+
+def pushed_wakeup_settings():
+    """The wake-up settings Monty sent with the pushed alarm (None for each it didn't)"""
+    return clean_wakeup_settings(read_json(settings.ALARM_STATE_FILE, {}) or {})[0]
+
+
+def resolve_wakeup(pushed, local):
+    """What an alarm plays and how long it snoozes: Monty's push first, then the
+    Pi's own wakeup_config.json (local, from load_wakeup_config), then settings.
+    'from' says where each came from, for the log."""
+    resolved = {'from': {}}
+    for key, pushed_key, fallback in (('mode', 'wakeMode', local['mode']),
+                                      ('mp3_track', 'mp3Track', local['mp3_track']),
+                                      ('snooze_minutes', 'snoozeMinutes', settings.SNOOZE_MINUTES)):
+        value = pushed.get(pushed_key)
+        resolved[key] = value if value is not None else fallback
+        resolved['from'][key] = 'set in Monty' if value is not None else 'Pi default'
+    return resolved
+
+
+def describe_wakeup(wake):
+    """'Pandora, snooze 9 min' style summary of resolve_wakeup()'s result"""
+    sound = {'pianobar': 'Pandora', 'mp3': f"MP3 {wake['mp3_track']}", 'fm': 'FM radio'}.get(wake['mode'], wake['mode'])
+    return (f"{sound} ({wake['from']['mode']}), "
+            f"snooze {wake['snooze_minutes']} min ({wake['from']['snooze_minutes']})")
+
+
 def load_wakeup_config():
     """Wake-up mode ("pianobar", "mp3" or "fm") and the MP3 track to play"""
     config = read_json(settings.WAKEUP_CONFIG_FILE, {}) or {}

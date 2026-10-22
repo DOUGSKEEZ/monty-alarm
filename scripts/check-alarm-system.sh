@@ -80,10 +80,13 @@ python3 - <<'PY'
 import sys
 sys.path.insert(0, 'core')
 import settings
-from statefiles import pushed_alarm, describe_alarm, read_json
+from statefiles import (pushed_alarm, describe_alarm, read_json, pushed_wakeup_settings,
+                        resolve_wakeup, describe_wakeup, load_wakeup_config)
 _, at = pushed_alarm()
 pushed = read_json(settings.ALARM_STATE_FILE, {}) or {}
 print(f"   Pushed by Monty: {describe_alarm(at) if at else 'no alarm'} (last update {pushed.get('lastUpdate')})")
+if at:
+    print(f"   Wake-up: {describe_wakeup(resolve_wakeup(pushed_wakeup_settings(), load_wakeup_config()))}")
 handled = read_json(settings.TRIGGER_STATE_FILE, {}) or {}
 if handled:
     print(f"   Last alarm handled: {handled.get('handled_alarm')} ({handled.get('result')} at {handled.get('at')})")

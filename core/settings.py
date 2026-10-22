@@ -26,6 +26,7 @@ STOP_SIGNAL = SIGNALS_DIR / "alarm_stop"
 SNOOZE_FLASH_SIGNAL = SIGNALS_DIR / "snooze_flash"    # A skip reached pianobar: flash Snooze
 CHECK_FLASH_SIGNAL = SIGNALS_DIR / "check_flash"      # A thumbs down reached pianobar: flash Check
 DISPLAY_FILE = SIGNALS_DIR / "alarm_display.txt"      # WAKE!, SNZ HH:MM or empty, until there's a real display
+SONG_LOG_FILE = BASE_DIR / "songs.log"                # Every song the alarm played (appended by alarm_trigger.py)
 
 # Buttons. Both run our firmware (firmware/button/: USB 1209:0001, one keyboard
 # interface :1.0 that sends KEY_A) and look identical, so /dev/input/by-id
@@ -65,6 +66,12 @@ DEFAULT_MP3 = "THE_HIT.mp3"  # MP3 mode with no track chosen, and the fallback w
 PANDORA_START_SECONDS = 20   # Fall back to the MP3 if Pandora hasn't started a song by then
 PIANOBAR_CTL = Path.home() / ".config/pianobar/ctl"  # pianobar's control FIFO (core/pianobar.py)
 
+# Wake-up settings. Monty can send wakeMode, mp3Track and snoozeMinutes with each
+# alarm (its alarm popup); anything it doesn't send comes from wakeup_config.json
+# (core/wakeup_mode_manager.py), then from here.
+WAKE_MODES = ("pianobar", "mp3", "fm")
+FM_AVAILABLE = False              # No FM module yet: "fm" plays Pandora
+
 # Speaker power (core/speakers.py): a relay on this GPIO feeds 12 V into the
 # ZD3's Trigger In at alarm time, and the ZD3 passes it on to the ZA3. Measured
 # 2026-10-21: the ZD3 appears on USB ~4 s after the click and the ZA3 lets sound
@@ -77,5 +84,6 @@ SPEAKER_OFF_DELAY_SECONDS = 300   # Keep the speakers on this long after the ala
 # Alarm timing
 CHECK_INTERVAL = 1           # Seconds between schedule checks
 LATE_GRACE_MINUTES = 15      # Still ring if the Pi was down at alarm time and is back within this
-SNOOZE_MINUTES = 9
+SNOOZE_MINUTES = 9                # Default; Monty can send another length with the alarm
+SNOOZE_MINUTES_RANGE = (1, 30)    # Accepted from Monty (its slider offers 3-15)
 ALARM_DURATION_MINUTES = 60  # Auto-stop after this long

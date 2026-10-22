@@ -3,6 +3,7 @@
 Wake-Up Mode Manager for Monty Alarm Clock
 Chooses what the alarm plays and manages the MP3 library.
 Everything is kept in wakeup_config.json, which alarm_trigger.py reads at alarm time.
+These are the Pi's defaults: whatever Monty sends with an alarm (its alarm popup) wins.
 
   python3 core/wakeup_mode_manager.py                  # status
   python3 core/wakeup_mode_manager.py mode <pianobar|mp3|fm>
@@ -18,7 +19,7 @@ import sys
 from pathlib import Path
 
 import settings
-from statefiles import read_json, write_json, load_wakeup_config
+from statefiles import read_json, write_json, load_wakeup_config, pushed_wakeup_settings
 
 MODES = {
     "pianobar": "Pandora internet radio (falls back to the MP3 if no song starts)",
@@ -44,6 +45,9 @@ def show_status():
     print("=" * 40)
     print(f"Mode:      {config['mode']} - {MODES.get(config['mode'], 'unknown')}")
     print(f"MP3 track: {config['mp3_track']}{'' if track.exists() else '  ❌ FILE NOT FOUND'}")
+    from_monty = {k: v for k, v in pushed_wakeup_settings().items() if v is not None}
+    if from_monty:
+        print(f"From Monty for the next alarm (wins over the above): {from_monty}")
     print(__doc__.split("\n\n", 1)[1].rstrip())
 
 

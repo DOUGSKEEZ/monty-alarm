@@ -140,7 +140,7 @@ async def main():
     print("\n🎯 Alarm Clock Button Handler Started")
     print("=" * 50)
     print(f"SNOOZE button (USB port {settings.SNOOZE_PORT}):")
-    print(f"  • Press to snooze alarm for {settings.SNOOZE_MINUTES} minutes")
+    print(f"  • Press to snooze (length set in Monty, {settings.SNOOZE_MINUTES} min by default)")
     print(f"  • Hold {settings.LONG_PRESS_SECONDS} seconds while pianobar plays: next song")
     print(f"\nCHECK button (USB port {settings.CHECK_PORT}):")
     print(f"  • Hold {settings.LONG_PRESS_SECONDS} seconds to stop alarm")

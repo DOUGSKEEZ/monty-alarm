@@ -7,7 +7,7 @@ A bedside Raspberry Pi that plays wake-up music at the time set in the Monty hom
 - Physical Snooze and Check/Stop buttons (two single-key USB keypads) whose lights follow the alarm and stay dark at night
 - Wake-up music from Pandora (pianobar) or a looping MP3, with an automatic MP3 fallback if Pandora doesn't start
 - Gradual volume ramp on the Fosi Audio ZD3
-- 9-minute snooze, auto-stop after 60 minutes, still rings up to 15 minutes late after a reboot
+- Wake-up sound (Pandora or an MP3) and snooze length set in Monty's alarm popup; 9-minute snooze by default, auto-stop after 60 minutes, still rings up to 15 minutes late after a reboot
 - Speaker power: at alarm time a relay wakes the ZD3 and ZA3 through their 12 V trigger, and they go back to standby after
 - Planned: a display, FM radio
 
@@ -27,7 +27,7 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 
 | Service | Runs | Job |
 | --- | --- | --- |
-| `monty-alarm-api.service` | `server.py` (Flask, venv) | Receives Monty's pushes, writes `alarm_state.json`, asks Monty to sync, serves `/api/health` |
+| `monty-alarm-api.service` | `server.py` (Flask, venv) | Receives Monty's pushes, writes `alarm_state.json`, asks Monty to sync, serves `/api/health` and `/api/wakeup/options` |
 | `alarm-trigger.service` | `core/alarm_trigger.py` | Rings at the alarm time, wakes the speakers, plays music, ramps volume, handles snooze/stop |
 | `alarm-buttons.service` | `core/alarm_button_handler.py` | Reads the buttons and drops signal files for the trigger |
 | `button-leds.service` | `core/button_leds.py watch` | Sets the button lights from the alarm's state. Separate, so a light problem can't stop the alarm |
@@ -35,7 +35,7 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 All four run as user `pi`. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
 
 ## Buttons
-- **Snooze** (USB port 1.4): press to snooze 9 minutes. Press as often as you like. It snoozes when you let go. **Hold it 1.1 s while pianobar plays to skip to the next song** without a thumbs down; the Snooze light flickers blue. With no pianobar playing, a hold snoozes too.
+- **Snooze** (USB port 1.4): press to snooze (9 minutes, or the length set in Monty). Press as often as you like. It snoozes when you let go. **Hold it 1.1 s while pianobar plays to skip to the next song** without a thumbs down; the Snooze light flickers blue. With no pianobar playing, a hold snoozes too.
 - **Check** (USB port 1.3): **hold 1.1 s to stop** the alarm, including during a snooze. **Tap while pianobar is playing for a thumbs down** on the Pandora song: Pandora won't play it on that station again, and pianobar skips to the next song. It works for the alarm's music and for a pianobar started by hand over SSH, because it goes through pianobar's control FIFO (`~/.config/pianobar/ctl`, see `core/pianobar.py`). The Check light flickers blue to confirm. A tap when pianobar isn't running logs the next alarm to the journal.
 
 Both buttons run our own firmware ([`firmware/button/`](firmware/button/README.md)): a plain keyboard that sends `a`, with an RGB light the Pi controls over USB. The lights follow the alarm (colours in `settings.BUTTON_LIGHTS`):
@@ -50,9 +50,9 @@ A button that's unplugged and plugged back in starts dark and gets its light bac
 Presses while no alarm is ringing are ignored, so they never carry over to the next alarm. The buttons are found by USB port (`/dev/input/by-path`), because both are the same model and `/dev/input/by-id` can't tell them apart: **if you swap the plugs, the buttons swap**.
 
 ## How an alarm runs
-1. Monty pushes `nextAlarm` (UTC). `server.py` stores it, ignoring any push older than the one it already has (Monty sends clear-then-set without waiting).
+1. Monty pushes `nextAlarm` (UTC), with the alarm popup's `wakeMode` (`pianobar`, `mp3` or `fm`), `mp3Track` and `snoozeMinutes`. `server.py` stores them, ignoring any push older than the one it already has (Monty sends clear-then-set without waiting). An invalid setting is dropped with a warning and the Pi's default applies: `wakeup_config.json`, then `settings.py`. Monty's "Shades only" arrives as no alarm at all.
 2. The trigger rings once the alarm time is reached, up to 15 minutes late. Older alarms are logged as missed. Each alarm is remembered in `trigger_state.json` by its `nextAlarm` value, so it never rings twice and several alarms a day work.
-3. The speaker relay clicks on (see Speaker power), and the music starts about 8 s later.
+3. The settings are fixed for this alarm when it starts ringing (Monty clears its one-shot wake-up afterwards). The speaker relay clicks on (see Speaker power), and the music starts about 8 s later. FM isn't built yet, so `fm` plays Pandora.
 4. The music starts at 10% and ramps to 35% over 10 s (the `Alarm` control on the ZD3).
 5. In Pandora mode, if no song starts within 20 s, or the player quits mid-alarm, it switches to the MP3.
 6. The speakers stay on through snoozes and go back to standby 5 minutes after the alarm ends.
@@ -84,6 +84,10 @@ sudo ./scripts/install.sh
 # Logs
 sudo journalctl -u alarm-trigger -u alarm-buttons -u button-leds -u monty-alarm-api -f
 
+# Songs the alarm played (kept across reboots, unlike the journal)
+tail -n 30 songs.log
+grep Adele songs.log
+
 # Button lights (1.4 = Snooze, 1.3 = Check). A manual set lasts until the alarm's state next changes
 python3 core/button_leds.py info
 python3 core/button_leds.py set 1.4 0 200 0 breathe   # solid, breathe, blink or fast
@@ -105,7 +109,11 @@ python3 core/wakeup_mode_manager.py test 20         # play 20 s through the alar
 
 # Ring a test alarm 2 minutes from now (doesn't touch Monty), then restore Monty's schedule
 ./scripts/test-alarm.sh 2
+./scripts/test-alarm.sh 2 --mode mp3 --track Beethoven.mp3 --snooze 3   # with popup settings
 ./scripts/test-alarm.sh --restore
+
+# What the Pi offers Monty's alarm popup (MP3 list, whether FM works, defaults)
+curl -s localhost:5000/api/wakeup/options
 
 # Unit tests
 venv/bin/python -m unittest discover -s tests -v
@@ -120,6 +128,7 @@ sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo s
 | `alarm_state.json` | The schedule Monty pushed (written only by `server.py`) |
 | `trigger_state.json` | The last alarm rung or missed (written only by the trigger) |
 | `wakeup_config.json` | Wake-up mode and MP3 track |
+| `songs.log` | Every song the alarm played, one dated line each, with the station, thumbs and snoozes (appended by the trigger) |
 | `signals/alarm_snooze`, `signals/alarm_stop` | One-shot button signals |
 | `signals/alarm_display.txt` | `WAKE!`, `SNZ HH:MM` or empty: a stand-in until there's a display |
 | `music/` | MP3s |

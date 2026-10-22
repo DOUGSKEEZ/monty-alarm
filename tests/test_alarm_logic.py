@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 import settings
 import statefiles
-from alarm_trigger import alarm_action, PIANOBAR_SONG
+from alarm_trigger import alarm_action, PIANOBAR_SONG, song_log_entry, log_song
 
 
 class AlarmActionTests(unittest.TestCase):
@@ -58,6 +58,36 @@ class PianobarOutputTests(unittest.TestCase):
 
     def test_station_line_does_not(self):
         self.assertFalse(PIANOBAR_SONG.match('|>  Station "Morning Hits Radio" (104370043902517433)'))
+
+
+class SongLogTests(unittest.TestCase):
+    def test_song_and_station_are_logged(self):
+        self.assertEqual(song_log_entry('|>  "Rolling in the Deep" by "Adele" on "21"'),
+                         '"Rolling in the Deep" by "Adele" on "21"')
+        self.assertEqual(song_log_entry('|>  Station "Morning Hits Radio" (104370043902517433)'),
+                         'Station "Morning Hits Radio" (104370043902517433)')
+
+    def test_thumbs_are_logged(self):
+        self.assertEqual(song_log_entry('(i) Banning song... Ok.'), '  thumbs down')
+        self.assertEqual(song_log_entry('(i) Loving song... Ok.'), '  thumbs up')
+
+    def test_chatter_is_not(self):
+        for line in ('(i) Login... Ok.', '(i) Receiving new playlist... Ok.',
+                     'Welcome to pianobar (2022.04.01)! Press ? for a list of commands.'):
+            self.assertIsNone(song_log_entry(line))
+
+    def test_lines_are_appended_with_the_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'songs.log'
+            log_song('--- Alarm for 09:45 ---', when=datetime(2026, 10, 22, 9, 45), path=path)
+            log_song('"Save Your Tears" by "The Weeknd" on "Après"', when=datetime(2026, 10, 22, 9, 50), path=path)
+            self.assertEqual(path.read_text(encoding='utf-8'),
+                             '2026-10-22 09:45  --- Alarm for 09:45 ---\n'
+                             '2026-10-22 09:50  "Save Your Tears" by "The Weeknd" on "Après"\n')
+
+    def test_unwritable_log_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_song('x', path=Path(tmp) / 'missing-dir' / 'songs.log')
 
 
 class StateFileTests(unittest.TestCase):
@@ -138,6 +168,38 @@ class PianobarFifoTests(unittest.TestCase):
         self.assertFalse(pianobar.send('-', self.ctl))
 
 
+class WakeupSettingsTests(unittest.TestCase):
+    def test_valid_settings_are_kept(self):
+        from statefiles import clean_wakeup_settings
+        clean, warnings = clean_wakeup_settings({'wakeMode': 'mp3', 'mp3Track': 'Beethoven.mp3', 'snoozeMinutes': 12})
+        self.assertEqual(clean, {'wakeMode': 'mp3', 'mp3Track': 'Beethoven.mp3', 'snoozeMinutes': 12})
+        self.assertEqual(warnings, [])
+
+    def test_missing_and_null_are_silent_defaults(self):
+        from statefiles import clean_wakeup_settings
+        clean, warnings = clean_wakeup_settings({'mp3Track': None})
+        self.assertEqual(clean, {'wakeMode': None, 'mp3Track': None, 'snoozeMinutes': None})
+        self.assertEqual(warnings, [])
+
+    def test_bad_values_are_dropped_with_a_warning(self):
+        from statefiles import clean_wakeup_settings
+        for bad in ({'snoozeMinutes': 0}, {'snoozeMinutes': 31}, {'snoozeMinutes': '12'},
+                    {'snoozeMinutes': 12.5}, {'snoozeMinutes': True}, {'wakeMode': 'radio'},
+                    {'mp3Track': '../secret.mp3'}, {'mp3Track': 'song.wav'}, {'mp3Track': 7}):
+            clean, warnings = clean_wakeup_settings(bad)
+            self.assertEqual(set(clean.values()), {None}, bad)
+            self.assertEqual(len(warnings), 1, bad)
+
+    def test_monty_wins_then_the_pi_then_settings(self):
+        from statefiles import resolve_wakeup
+        local = {'mode': 'mp3', 'mp3_track': 'THE_HIT.mp3'}
+        wake = resolve_wakeup({'wakeMode': 'pianobar', 'mp3Track': None, 'snoozeMinutes': None}, local)
+        self.assertEqual((wake['mode'], wake['mp3_track'], wake['snooze_minutes']),
+                         ('pianobar', 'THE_HIT.mp3', settings.SNOOZE_MINUTES))
+        self.assertEqual(wake['from'], {'mode': 'set in Monty', 'mp3_track': 'Pi default',
+                                        'snooze_minutes': 'Pi default'})
+
+
 class SpeakerRelayTests(unittest.TestCase):
     """pinctrl's lines as seen on the Pi on 2026-10-21"""
 
@@ -199,6 +261,43 @@ class PushReceiverTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()['ignored'])
         self.assertEqual(self.stored()['nextAlarm'], '2026-10-19T14:08:00.000Z')
+
+    def test_wakeup_settings_stored_and_cleared(self):
+        self.client.post('/api/schedule/update', json={
+            'timestamp': '2026-10-21T06:00:00.000Z', 'action': 'schedule_set',
+            'schedule': {'hasAlarm': True, 'nextAlarm': '2026-10-21T15:00:00.000Z',
+                         'scheduledAt': '2026-10-21T06:00:00.000Z',
+                         'wakeMode': 'mp3', 'mp3Track': 'Beethoven.mp3', 'snoozeMinutes': 3}})
+        self.assertEqual((self.stored()['wakeMode'], self.stored()['mp3Track'], self.stored()['snoozeMinutes']),
+                         ('mp3', 'Beethoven.mp3', 3))
+        self.push('schedule_cleared', '2026-10-21T06:00:05.000Z')
+        self.assertIsNone(self.stored()['snoozeMinutes'])
+        self.assertIsNone(self.stored()['wakeMode'])
+
+    def test_bad_setting_still_stores_the_alarm(self):
+        self.client.post('/api/schedule/update', json={
+            'timestamp': '2026-10-21T06:00:00.000Z', 'action': 'schedule_set',
+            'schedule': {'hasAlarm': True, 'nextAlarm': '2026-10-21T15:00:00.000Z',
+                         'scheduledAt': '2026-10-21T06:00:00.000Z', 'snoozeMinutes': 99}})
+        self.assertTrue(self.stored()['hasAlarm'])
+        self.assertIsNone(self.stored()['snoozeMinutes'])
+
+    def test_wakeup_options(self):
+        music = Path(self.tmp.name) / 'music'
+        music.mkdir()
+        for name in ('B.mp3', 'A.mp3', 'notes.txt'):
+            (music / name).touch()
+        original = settings.MUSIC_DIR
+        settings.MUSIC_DIR = music
+        try:
+            options = self.client.get('/api/wakeup/options').get_json()
+        finally:
+            settings.MUSIC_DIR = original
+        self.assertEqual(options['mp3Tracks'], ['A.mp3', 'B.mp3'])
+        self.assertTrue(options['modes']['mp3']['available'])
+        self.assertEqual(options['modes']['fm']['available'], settings.FM_AVAILABLE)
+        self.assertIn('reason', options['modes']['fm'])
+        self.assertEqual(options['snoozeMinutes'], dict(zip(('min', 'max'), settings.SNOOZE_MINUTES_RANGE)))
 
     def test_health_reports_audio(self):
         audio = self.client.get('/api/health').get_json()['audio']

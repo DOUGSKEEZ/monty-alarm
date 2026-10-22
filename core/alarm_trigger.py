@@ -11,6 +11,9 @@ At alarm time it clicks the speaker relay on (core/speakers.py), waits for
 the ZD3 to wake and the ZA3 to unmute, then starts the music. The speakers
 stay on through snoozes and go off SPEAKER_OFF_DELAY_SECONDS after the alarm.
 
+Every song it plays, with the station, thumbs and snoozes, is added to
+songs.log (settings.SONG_LOG_FILE), which outlasts the journal.
+
 Run with --test-music [seconds] to play the wake-up music through the
 alarm's audio path without waiting for an alarm.
 """
@@ -29,11 +32,14 @@ import pianobar
 import settings
 import speakers
 from statefiles import (read_json, write_json, pushed_alarm, load_wakeup_config,
+                        pushed_wakeup_settings, resolve_wakeup, describe_wakeup,
                         describe_alarm, take_signal, write_display)
 
 ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 # pianobar's song line: |>  "Cheap Thrills" by "Sia" on "..." (its station line also starts with |>)
 PIANOBAR_SONG = re.compile(r'^\|>\s+".*" by "')
+# pianobar's replies when a thumbs down (the Check button) or thumbs up goes through
+PIANOBAR_RATINGS = {'(i) Banning song... Ok.': 'thumbs down', '(i) Loving song... Ok.': 'thumbs up'}
 NOT_LOGGED = object()
 
 
@@ -45,6 +51,26 @@ def alarm_action(now, alarm_at, alarm_key, handled_alarm,
     if now - alarm_at <= late_grace:
         return 'ring'
     return 'missed'
+
+
+def song_log_entry(line):
+    """What a pianobar output line adds to the song log, or None"""
+    if line.startswith('|>'):
+        return line[2:].strip()  # Station "..." or "Title" by "Artist" on "Album"
+    if line in PIANOBAR_RATINGS:
+        return f"  {PIANOBAR_RATINGS[line]}"
+    return None
+
+
+def log_song(entry, when=None, path=None):
+    """Add a dated line to the song log. Opened per line so deleting the file
+    is safe, and never raises: a full SD card mustn't stop the alarm."""
+    when = when or datetime.now()
+    try:
+        with open(path or settings.SONG_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"{when:%Y-%m-%d %H:%M}  {entry}\n")
+    except OSError as e:
+        print(f"   ⚠️ Couldn't write the song log: {e}")
 
 
 def set_volume(percent):
@@ -89,6 +115,7 @@ class AlarmTrigger:
         self.output_task = None     # Drains the player's output into the journal
         self.volume_task = None
         self.speakers_off_at = None  # When to switch the speakers off after an alarm
+        self.wake = None             # The ringing alarm's settings (resolve_wakeup), fixed when it starts
         state = read_json(settings.TRIGGER_STATE_FILE, {}) or {}
         self.handled_alarm = state.get('handled_alarm')
         self.logged_alarm = NOT_LOGGED
@@ -181,7 +208,8 @@ class AlarmTrigger:
     # ---------- Music ----------
 
     async def watch_output(self, stream, label, song_started=None):
-        """Log the player's useful output lines and spot Pandora's first song.
+        """Log the player's useful output lines, copy pianobar's songs to the
+        song log and spot Pandora's first song.
         Reads in chunks because pianobar redraws its clock with \\r, not \\n."""
         buffer = ''
         while True:
@@ -195,6 +223,9 @@ class AlarmTrigger:
                 if not line or line.startswith('#'):  # '#  -03:21/03:45' is the clock
                     continue
                 print(f"   [{label}] {line}")
+                entry = song_log_entry(line) if label == 'pianobar' else None
+                if entry is not None:
+                    log_song(entry)
                 if song_started is not None and PIANOBAR_SONG.match(line):
                     song_started.set()
 
@@ -231,6 +262,7 @@ class AlarmTrigger:
             print(f"   ❌ MP3 not found: {path}")
             path = settings.MUSIC_DIR / settings.DEFAULT_MP3
         print(f"   Playing MP3: {path.name}")
+        log_song(f"MP3 {path.name}")
         await self.start_player('mpg123', 'mpg123', '-q', '-o', 'alsa', '--loop', '-1', str(path))
 
     async def prepare_volume(self):
@@ -262,20 +294,23 @@ class AlarmTrigger:
         await stop_all_players()
         await self.prepare_volume()
 
-        config = load_wakeup_config()
-        mode = config['mode']
+        wake = self.wake_settings()
+        mode = wake['mode']
         print(f"   Wake-up mode: {mode.upper()}")
-        if mode == 'fm':
+        if mode == 'fm' and not settings.FM_AVAILABLE:
             print("   📻 FM radio isn't built yet - using Pandora")
+            mode = 'pianobar'
+        elif mode not in settings.WAKE_MODES:
+            print(f"   ⚠️ Unknown wake-up mode {mode!r} - using Pandora")
             mode = 'pianobar'
 
         if mode == 'pianobar':
             if not await self.start_pandora():
                 print(f"   ⚠️ No Pandora song after {settings.PANDORA_START_SECONDS}s - falling back to MP3")
                 await self.stop_player()
-                await self.start_mp3(config['mp3_track'])
+                await self.start_mp3(wake['mp3_track'])
         else:
-            await self.start_mp3(config['mp3_track'])
+            await self.start_mp3(wake['mp3_track'])
 
         self.volume_task = asyncio.create_task(self.ramp_volume())
 
@@ -287,7 +322,11 @@ class AlarmTrigger:
             return  # Don't spin (or flood the journal) if the MP3 can't play either
         print(f"⚠️ {self.player_name} stopped (exit {self.player.returncode}) - switching to MP3")
         await self.stop_player()
-        await self.start_mp3(load_wakeup_config()['mp3_track'])
+        await self.start_mp3(self.wake_settings()['mp3_track'])
+
+    def wake_settings(self):
+        """The ringing alarm's settings, or (for --test-music) what the next alarm would use"""
+        return self.wake or resolve_wakeup(pushed_wakeup_settings(), load_wakeup_config())
 
     async def stop_player(self):
         if self.player is not None and self.player.returncode is None:
@@ -344,6 +383,11 @@ class AlarmTrigger:
         """Ring until stopped, with any number of snoozes, for up to ALARM_DURATION_MINUTES"""
         print(f"\n⏰ ALARM! Set for {alarm_at:%H:%M}, ringing at {datetime.now():%H:%M:%S}")
         self.mark_handled(alarm_key, 'rang')
+        # Read once: Monty clears its one-shot wake-up after firing, and that
+        # mustn't change the alarm that's ringing
+        self.wake = resolve_wakeup(pushed_wakeup_settings(), load_wakeup_config())
+        print(f"🎛️ Wake-up: {describe_wakeup(self.wake)}")
+        log_song(f"--- Alarm for {alarm_at:%H:%M} ---")
         # Only presses made while it rings count
         take_signal(settings.SNOOZE_SIGNAL)
         take_signal(settings.STOP_SIGNAL)
@@ -366,8 +410,9 @@ class AlarmTrigger:
                     print(f"⏱️ Alarm stopped itself after {settings.ALARM_DURATION_MINUTES} minutes")
                     break
 
-                snooze_until = min(datetime.now() + timedelta(minutes=settings.SNOOZE_MINUTES), deadline)
+                snooze_until = min(datetime.now() + timedelta(minutes=self.wake['snooze_minutes']), deadline)
                 print(f"😴 Snoozing until {snooze_until:%H:%M}")
+                log_song(f"  snoozed until {snooze_until:%H:%M}")
                 write_display(f"SNZ {snooze_until:%H:%M}")
                 if await self.wait_out_snooze(snooze_until):
                     print("✋ Alarm stopped during snooze")
@@ -379,6 +424,7 @@ class AlarmTrigger:
         finally:
             await self.stop_music()
             write_display("")
+            self.wake = None
             # Speakers stay on a while, in case of music while getting ready
             self.speakers_off_at = datetime.now() + timedelta(seconds=settings.SPEAKER_OFF_DELAY_SECONDS)
         print(f"✅ Alarm finished - speakers off at {self.speakers_off_at:%H:%M:%S} unless something plays")
@@ -393,7 +439,7 @@ class AlarmTrigger:
     async def monitor_loop(self):
         """Main monitoring loop"""
         print("🔍 Starting alarm monitor...")
-        print(f"   Snooze: {settings.SNOOZE_MINUTES} min, auto-stop: {settings.ALARM_DURATION_MINUTES} min, "
+        print(f"   Snooze: {settings.SNOOZE_MINUTES} min unless Monty sends another, auto-stop: {settings.ALARM_DURATION_MINUTES} min, "
               f"late grace: {settings.LATE_GRACE_MINUTES} min")
         print(f"   Volume ramp: {settings.MIN_VOLUME}% to {settings.MAX_VOLUME}% over {settings.VOLUME_RAMP_SECONDS}s "
               f"on {settings.AUDIO_CARD} ({'awake' if audio_device_present() else 'in standby or unplugged'})")
@@ -437,6 +483,7 @@ class AlarmTrigger:
         """Play the wake-up music through the alarm path, with the speaker wake-up
         and the volume ramp. Speakers that were off go off again afterwards."""
         was_on = speakers.is_on()
+        log_song("--- Music test ---")
         try:
             await self.wake_speakers()
             await self.start_music()
