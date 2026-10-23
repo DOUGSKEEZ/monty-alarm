@@ -33,8 +33,18 @@ class AlarmActionTests(unittest.TestCase):
     def action(self, now, handled=None):
         return alarm_action(now, self.alarm_at, self.key, handled)
 
-    def test_waits_before_alarm_time(self):
-        self.assertEqual(self.action(self.alarm_at - timedelta(seconds=1)), 'wait')
+    lead = timedelta(seconds=settings.SPEAKER_LEAD_SECONDS)
+
+    def test_waits_before_speaker_lead(self):
+        self.assertEqual(self.action(self.alarm_at - self.lead - timedelta(seconds=1)), 'wait')
+
+    def test_starts_early_to_wake_speakers(self):
+        # The speakers take ~7 s to wake, so the music can start with the shades
+        self.assertEqual(self.action(self.alarm_at - self.lead), 'ring')
+
+    def test_no_lead_waits_for_alarm_time(self):
+        self.assertEqual(alarm_action(self.alarm_at - timedelta(seconds=1), self.alarm_at, self.key, None,
+                                      lead=timedelta(0)), 'wait')
 
     def test_rings_at_alarm_time(self):
         self.assertEqual(self.action(self.alarm_at), 'ring')

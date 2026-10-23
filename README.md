@@ -51,8 +51,8 @@ Presses while no alarm is ringing are ignored, so they never carry over to the n
 
 ## How an alarm runs
 1. Monty pushes `nextAlarm` (UTC), with the alarm popup's `wakeMode` (`pianobar`, `mp3` or `fm`), `mp3Track` and `snoozeMinutes`. `server.py` stores them, ignoring any push older than the one it already has (Monty sends clear-then-set without waiting). An invalid setting is dropped with a warning and the Pi's default applies: `wakeup_config.json`, then `settings.py`. Monty's "Shades only" arrives as no alarm at all. A song from Monty's library is downloaded straight away (see Alarm songs).
-2. The trigger rings once the alarm time is reached, up to 15 minutes late. Older alarms are logged as missed. Each alarm is remembered in `trigger_state.json` by its `nextAlarm` value, so it never rings twice and several alarms a day work.
-3. The settings are fixed for this alarm when it starts ringing (Monty clears its one-shot wake-up afterwards). The speaker relay clicks on (see Speaker power), and the music starts about 8 s later. FM isn't built yet, so `fm` plays Pandora.
+2. The trigger starts 10 s before the alarm time to wake the speakers, and still rings up to 15 minutes late. Older alarms are logged as missed. Each alarm is remembered in `trigger_state.json` by its `nextAlarm` value, so it never rings twice and several alarms a day work.
+3. The settings are fixed for this alarm when it starts (Monty clears its one-shot wake-up afterwards). The speaker relay clicks on 10 s early (see Speaker power), and the music starts at the alarm time, as Monty's shades go up. FM isn't built yet, so `fm` plays Pandora.
 4. The music starts at 10% and ramps to 35% over 10 s (the `Alarm` control on the ZD3).
 5. In Pandora mode, if no song starts within 20 s, or the player quits mid-alarm, it switches to the MP3.
 6. The speakers stay on through snoozes and go back to standby 5 minutes after the alarm ends.
@@ -72,13 +72,16 @@ The alarm's MP3 can be one of the Pi's own tracks in `music/` (`Beethoven.mp3`, 
 ## Speaker power
 The ZD3 and ZA3 sit in standby until an alarm. Relay 1 of an HL-52S module (IN1 on GPIO 4, header pin 7, active-low) switches 12 V from an MT3608 boost module (powered from a Pi USB port, set to 12.0 V) into the ZD3's 12 V Trigger In; the ZD3's Trigger Out wakes the ZA3. The ZD3 ignores 5 V. Wiring: relay VCC to pin 4, GND to pin 6, IN1 to pin 7; MT3608 OUT+ to the relay's COM; the bottom screw (NO) to the 3.5 mm plug's tip, Pi pin 14 to its sleeve. Leave the top screw (NC) empty: it carries 12 V while the relay is off.
 
-At alarm time the trigger:
-1. Clicks the relay on, together with Monty's shades.
+For each alarm the trigger:
+1. Clicks the relay on 10 s before the alarm time (`SPEAKER_LEAD_SECONDS`), so the music can start with Monty's shades. The button lights come on with the click.
 2. Waits for the ZD3 to appear on USB (about 4 s, up to 20 s).
 3. Plays a second of 44.1 kHz silence to it, retrying until it works. The ZD3 is listed a moment before it can play, and its first stream after waking snaps while it switches clock; this way the snap happens while the ZA3 is still muted.
-4. Waits until 3 s after the ZD3 appeared, so the ZA3 has unmuted (about 6 s after the click), then starts the music.
+4. Waits until 3 s after the ZD3 appeared, so the ZA3 has unmuted (about 7 s after the click).
+5. Starts the music at the alarm time, or straight away if the speakers took longer than the lead. Pandora's first song needs about 1.5 s more to load; an MP3 starts at once.
 
-Snooze keeps the speakers on. After the alarm they stay on for 5 minutes, longer while anything on the Pi is playing to the ZD3 (playback over Bluetooth from a phone isn't visible to the Pi, so it doesn't count). If the ZD3 is already on at alarm time, the music starts straight away. The relay can be switched by hand, and the ZD3's remote and knob still work while the relay is off. All the timings are in `settings.py` (`SPEAKER_*`).
+Setting `SPEAKER_LEAD_SECONDS = 0` brings back the old order: click with the shades, music about 8 s later.
+
+Snooze keeps the speakers on. After the alarm they stay on for 5 minutes, longer while anything on the Pi is playing to the ZD3 (playback over Bluetooth from a phone isn't visible to the Pi, so it doesn't count). If the ZD3 is already on, there's nothing to wait for and the music still starts at the alarm time. The relay can be switched by hand, and the ZD3's remote and knob still work while the relay is off. All the timings are in `settings.py` (`SPEAKER_*`).
 
 ## Audio
 Everything goes straight to ALSA. PulseAudio is masked by `install.sh`: it only ran while someone was logged in, and while it ran it took over ALSA's default device, so the alarm sounded different depending on whether anyone was SSH'd in. `audio/asound.conf` sends the default device to the ZD3 by card name, through a software volume control named `Alarm`. The ZD3 must be connected by USB and to the relay: `/api/health` reports `audio.present` (false in standby) and `audio.speakersOn`, and the trigger logs a warning if the ZD3 doesn't wake.

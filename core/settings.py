@@ -80,10 +80,12 @@ MONTY_SONGS_MAX_MB = 2048         # Keep this much; the least recently chosen so
 MIN_FREE_MB = 1024                # Never download into the SD card's last GB
 
 # Speaker power (core/speakers.py): a relay on this GPIO feeds 12 V into the
-# ZD3's Trigger In at alarm time, and the ZD3 passes it on to the ZA3. Measured
-# 2026-10-21: the ZD3 appears on USB ~4 s after the click and the ZA3 lets sound
-# through ~6 s after it, so the music starts ~8 s after the click.
+# ZD3's Trigger In before alarm time, and the ZD3 passes it on to the ZA3. Measured
+# 2026-10-21/22: the ZD3 appears on USB ~4 s after the click and is ready to play
+# ~7 s after it. Clicking SPEAKER_LEAD_SECONDS early lets the music start at the
+# alarm time, together with Monty's shades (Doug's choice, 2026-10-22).
 SPEAKER_TRIGGER_GPIO = 4          # BCM numbering: header pin 7
+SPEAKER_LEAD_SECONDS = 10         # Click this long before the alarm time (0 = click with the shades, music ~8 s later)
 SPEAKER_WAIT_SECONDS = 20         # Give up waiting for the ZD3 to wake after this (then play anyway)
 SPEAKER_SETTLE_SECONDS = 3        # From the ZD3 appearing to the music starting, so the amp is unmuted
 SPEAKER_OFF_DELAY_SECONDS = 300   # Keep the speakers on this long after the alarm ends (longer while the Pi plays)

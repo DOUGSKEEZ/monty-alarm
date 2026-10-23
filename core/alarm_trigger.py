@@ -7,9 +7,10 @@ rings at the alarm time, and handles snooze and stop from the buttons.
 Each alarm is remembered by its nextAlarm value once it has rung (or been
 missed), so it never rings twice and any number of alarms a day work.
 
-At alarm time it clicks the speaker relay on (core/speakers.py), waits for
-the ZD3 to wake and the ZA3 to unmute, then starts the music. The speakers
-stay on through snoozes and go off SPEAKER_OFF_DELAY_SECONDS after the alarm.
+SPEAKER_LEAD_SECONDS before the alarm time it clicks the speaker relay on
+(core/speakers.py) and waits for the ZD3 to wake and the ZA3 to unmute, so the
+music starts at the alarm time, with Monty's shades. The speakers stay on
+through snoozes and go off SPEAKER_OFF_DELAY_SECONDS after the alarm.
 
 Every song it plays, with the station, thumbs and snoozes, is added to
 songs.log (settings.SONG_LOG_FILE), which outlasts the journal.
@@ -45,9 +46,11 @@ NOT_LOGGED = object()
 
 
 def alarm_action(now, alarm_at, alarm_key, handled_alarm,
-                 late_grace=timedelta(minutes=settings.LATE_GRACE_MINUTES)):
-    """What to do about the pushed alarm right now: 'ring', 'missed' or 'wait'"""
-    if alarm_at is None or alarm_key == handled_alarm or now < alarm_at:
+                 late_grace=timedelta(minutes=settings.LATE_GRACE_MINUTES),
+                 lead=timedelta(seconds=settings.SPEAKER_LEAD_SECONDS)):
+    """What to do about the pushed alarm right now: 'ring', 'missed' or 'wait'.
+    'ring' starts lead early, to wake the speakers before the music is due."""
+    if alarm_at is None or alarm_key == handled_alarm or now < alarm_at - lead:
         return 'wait'
     if now - alarm_at <= late_grace:
         return 'ring'
@@ -382,7 +385,7 @@ class AlarmTrigger:
 
     async def ring(self, alarm_key, alarm_at):
         """Ring until stopped, with any number of snoozes, for up to ALARM_DURATION_MINUTES"""
-        print(f"\n⏰ ALARM! Set for {alarm_at:%H:%M}, ringing at {datetime.now():%H:%M:%S}")
+        print(f"\n⏰ ALARM! Set for {alarm_at:%H:%M}, starting at {datetime.now():%H:%M:%S}")
         self.mark_handled(alarm_key, 'rang')
         # Read once: Monty clears its one-shot wake-up after firing, and that
         # mustn't change the alarm that's ringing
@@ -397,6 +400,11 @@ class AlarmTrigger:
         try:
             write_display("WAKE!")  # The button lights come on with the click
             await self.wake_speakers()
+            # Woken early: hold the music for the alarm time, when the shades go up
+            early = (alarm_at - datetime.now()).total_seconds()
+            if early > 0:
+                await asyncio.sleep(early)
+            print(f"🎶 Music due at {alarm_at:%H:%M:%S}, starting {(datetime.now() - alarm_at).total_seconds():+.1f}s")
             while True:
                 write_display("WAKE!")
                 outcome = self.press_before_music()
@@ -447,7 +455,8 @@ class AlarmTrigger:
         relay = speakers.is_on()
         print(f"   Speakers: relay on GPIO {settings.SPEAKER_TRIGGER_GPIO} is "
               f"{ {True: 'on', False: 'off', None: 'UNREADABLE'}[relay] }, "
-              f"settle {settings.SPEAKER_SETTLE_SECONDS}s, off {settings.SPEAKER_OFF_DELAY_SECONDS}s after an alarm")
+              f"on {settings.SPEAKER_LEAD_SECONDS}s before the alarm, settle {settings.SPEAKER_SETTLE_SECONDS}s, "
+              f"off {settings.SPEAKER_OFF_DELAY_SECONDS}s after an alarm")
         self.check_clock()
         # A ring never survives a restart, so a WAKE! or SNZ left by a power cut
         # is stale; clear it so the button lights don't show it all night
