@@ -181,5 +181,33 @@ It runs as root, because the Wi-Fi passwords and host keys are root-only. The re
 
 `borgbackup` is installed with apt.
 
+## Rebuilding on a new SD card
+`scripts/rebuild.sh` turns a freshly flashed card back into this alarm. **Not yet tested on a blank card.**
+
+1. Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. In its OS customisation settings:
+   - hostname `monty-alarm`, user `pi` with a password
+   - Wi-Fi, with country US, and time zone America/Denver
+   - SSH on, with the laptop's public key
+2. Boot it, log in (`ssh pi@monty-alarm.local`) and run:
+   ```bash
+   sudo apt update && sudo apt install -y git
+   git clone https://github.com/DOUGSKEEZ/monty-alarm.git ~/monty-alarm
+   sudo ~/monty-alarm/scripts/rebuild.sh ssh://user@host/path/to/borg
+   ```
+   The repository's address is in the Monty Alarm handoff doc, not in git. The script prints a new key line for the backup server's `authorized_keys`: replace the old Pi's line with it, then press Enter to restore.
+3. `sudo reboot`, then check:
+   - The Pi's IP is still 192.168.10.109, since Monty sends the alarms there. The same Pi gets its address back; a replacement Pi needs the router's reservation moved to it.
+   - `scripts/check-alarm-system.sh` is all green and shows Monty's next alarm.
+   - A test alarm plays and the buttons work (`scripts/test-alarm.sh`).
+
+| Comes back from | What |
+| --- | --- |
+| GitHub | The code, units, audio config, udev rule and button firmware |
+| The backup | `/home/pi`: the Pandora login, the GitHub key, zsh and Powerlevel10k, `~/tools` (wchisp). The repo's untracked files: `wakeup_config.json`, `songs.log`, `config/`. The SSH host keys and the Wi-Fi networks |
+| Rebuilt | The packages, the venv (`requirements.txt`), I2C and SPI, pi's groups and shell, and everything `install.sh` sets up |
+| Monty | The schedule (the API asks Monty to sync when it starts), and the alarm song, downloaded again with that push |
+
+If the backup has commits that never reached GitHub, or uncommitted changes, they're kept in `~/monty-alarm-from-backup` to push from there. The script doesn't carry over the rest of the old `/etc`, nor `cmdline.txt` (it names the old card) or `config.txt` (its `hifiberry-dac` overlay isn't used: the sound goes to the ZD3 over USB).
+
 ## Requirements
 Raspberry Pi OS (Debian 12), `python3-evdev`, `pianobar` (logged in via `~/.config/pianobar/config` with `autostart_station`), `mpg123`, `alsa-utils`, `borgbackup` (for `scripts/backup.sh`), and a venv with Flask for `server.py` (`requirements.txt`). User `pi` must be in the `audio`, `input`, `plugdev` and `gpio` groups; `pinctrl` (raspi-utils) switches the relay. Building and flashing the button firmware also needs `sdcc`, `uhubctl` (apt) and [wchisp](https://github.com/ch32-rs/wchisp).
