@@ -132,6 +132,10 @@ curl -s localhost:5000/api/wakeup/options
 # Unit tests
 venv/bin/python -m unittest discover -s tests -v
 
+# Back up to the Borg server (see Backup), list the archives
+sudo scripts/backup.sh
+sudo scripts/backup.sh list
+
 # See which button is which (stop the button service first)
 sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo systemctl start alarm-buttons
 ```
@@ -149,5 +153,21 @@ sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo s
 | `music/from-monty/` | Alarm songs downloaded from Monty's library (not in git, up to 2 GB) |
 | `firmware/button/` | The buttons' firmware, its udev rule and how to flash it |
 
+## Backup
+`scripts/backup.sh` sends what a new SD card can't get from GitHub to a Borg repository on the backup server:
+- `/home/pi`: the Pandora login, `wakeup_config.json`, `songs.log`, unpushed commits
+- `/etc`: Wi-Fi, SSH host keys, the installed units and audio config
+- `/boot/firmware/config.txt` and `cmdline.txt`
+- lists of the installed packages, the venv and the enabled units (`/var/backups/monty-alarm/`)
+
+It skips what can be rebuilt or downloaded again: the venv (`requirements.txt`), `music/from-monty/`, `~/.cache` and `~/.cursor-server`. An archive is about 23 MB and takes under half a minute, at low priority.
+
+It runs as root, because the Wi-Fi passwords and host keys are root-only. The repository isn't encrypted (`--encryption none`), and the server's address isn't in git:
+- `/root/.config/borg/repo`: the repository, one line (`ssh://user@host/path/to/borg`)
+- `/root/.ssh/known_hosts`: the server's host key, so the first connection doesn't stop to ask
+- `/root/.ssh/monty-alarm-borg`: the Pi's key for the server, which should only let it run `borg serve` for that repository
+
+`borgbackup` is installed with apt.
+
 ## Requirements
-Raspberry Pi OS (Debian 12), `python3-evdev`, `pianobar` (logged in via `~/.config/pianobar/config` with `autostart_station`), `mpg123`, `alsa-utils`, and a venv with Flask for `server.py`. User `pi` must be in the `audio`, `input`, `plugdev` and `gpio` groups; `pinctrl` (raspi-utils) switches the relay. Building and flashing the button firmware also needs `sdcc`, `uhubctl` (apt) and [wchisp](https://github.com/ch32-rs/wchisp).
+Raspberry Pi OS (Debian 12), `python3-evdev`, `pianobar` (logged in via `~/.config/pianobar/config` with `autostart_station`), `mpg123`, `alsa-utils`, `borgbackup` (for `scripts/backup.sh`), and a venv with Flask for `server.py` (`requirements.txt`). User `pi` must be in the `audio`, `input`, `plugdev` and `gpio` groups; `pinctrl` (raspi-utils) switches the relay. Building and flashing the button firmware also needs `sdcc`, `uhubctl` (apt) and [wchisp](https://github.com/ch32-rs/wchisp).
