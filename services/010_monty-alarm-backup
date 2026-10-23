@@ -1,0 +1,4 @@
+# Installed to /etc/sudoers.d/ by scripts/install.sh. Lets pi start a backup
+# (scripts/git-hooks/post-commit) and nothing else, so the hook keeps working
+# if pi's blanket rule (/etc/sudoers.d/010_pi-nopasswd) is ever removed.
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block monty-alarm-backup.service

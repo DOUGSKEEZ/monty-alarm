@@ -1,0 +1,12 @@
+[Unit]
+Description=Monty Alarm backup to the Borg server (scripts/backup.sh)
+After=network-online.target
+Wants=network-online.target
+
+# Started by scripts/git-hooks/post-commit and monty-alarm-backup.timer, not at boot.
+# Runs as root: the Wi-Fi passwords, SSH host keys and the Pi's Borg key are root-only.
+[Service]
+Type=oneshot
+ExecStart=/home/pi/monty-alarm/scripts/backup.sh
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,12 @@
+#!/bin/sh
+# After every commit, back up to the Borg server in the background
+# (services/monty-alarm-backup.service). The commit doesn't wait for it, and
+# doesn't fail when the server is offline. scripts/install.sh turns this hook on
+# (git config core.hooksPath scripts/git-hooks) and installs the one sudo rule
+# it needs (services/010_monty-alarm-backup).
+if sudo -n /usr/bin/systemctl start --no-block monty-alarm-backup.service 2>/dev/null; then
+    echo "Backup started: journalctl -u monty-alarm-backup -n 20"
+else
+    echo "Backup not started: run sudo scripts/install.sh"
+fi
+exit 0

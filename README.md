@@ -32,7 +32,7 @@ server.py ──writes──► alarm_state.json ──read every 1 s──► c
 | `alarm-buttons.service` | `core/alarm_button_handler.py` | Reads the buttons and drops signal files for the trigger |
 | `button-leds.service` | `core/button_leds.py watch` | Sets the button lights from the alarm's state. Separate, so a light problem can't stop the alarm |
 
-All four run as user `pi`. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
+All four run as user `pi`. `monty-alarm-backup.service` (root, see [Backup](#backup)) runs only after a commit and from its nightly timer. Every path, address and tuning value is in [`core/settings.py`](core/settings.py).
 
 ## Buttons
 - **Snooze** (USB port 1.4): press to snooze (9 minutes, or the length set in Monty). Press as often as you like. It snoozes when you let go. **Hold it 1.1 s while pianobar plays to skip to the next song** without a thumbs down; the Snooze light flickers blue. With no pianobar playing, a hold snoozes too.
@@ -132,9 +132,13 @@ curl -s localhost:5000/api/wakeup/options
 # Unit tests
 venv/bin/python -m unittest discover -s tests -v
 
-# Back up to the Borg server (see Backup), list the archives
+# Back up to the Borg server now (see Backup), list the archives
 sudo scripts/backup.sh
 sudo scripts/backup.sh list
+
+# How the last automatic backup went, and when the next nightly one is
+journalctl -u monty-alarm-backup -n 20
+systemctl list-timers monty-alarm-backup
 
 # See which button is which (stop the button service first)
 sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo systemctl start alarm-buttons
@@ -160,7 +164,15 @@ sudo systemctl stop alarm-buttons && python3 scripts/test_button_keys.py; sudo s
 - `/boot/firmware/config.txt` and `cmdline.txt`
 - lists of the installed packages, the venv and the enabled units (`/var/backups/monty-alarm/`)
 
-It skips what can be rebuilt or downloaded again: the venv (`requirements.txt`), `music/from-monty/`, `~/.cache` and `~/.cursor-server`. An archive is about 23 MB and takes under half a minute, at low priority.
+It skips what can be rebuilt or downloaded again: the venv (`requirements.txt`), `music/from-monty/`, `~/.cache` and `~/.cursor-server`. The first archive was 23 MB; later ones store only what changed, a few KB to MB each. It runs at low priority and takes under half a minute.
+
+It runs by itself as `monty-alarm-backup.service`, in the background:
+- **After every commit.** `scripts/git-hooks/post-commit` starts it, so the commit doesn't wait and doesn't fail when the server is offline. A commit made while a backup is still running is folded into that run, and the next commit or the nightly run picks it up.
+- **Every night at 03:30** (`monty-alarm-backup.timer`, or at the next boot if the Pi was off). This catches what changes without a commit: `songs.log`, `wakeup_config.json`, the system.
+
+Archives are named for the time and the commit checked out, like `monty-alarm-2026-10-22T20:38:39-22a103d`, with `-dirty` added when the repo had uncommitted changes. To see the Pi as it was at a commit, pick an archive with that ID and no `-dirty`.
+
+The hook runs as `pi`, which may start that one service with sudo, and nothing else: `/etc/sudoers.d/010_monty-alarm-backup`. `install.sh` installs that rule and the timer, and turns the hook on (`git config core.hooksPath scripts/git-hooks`).
 
 It runs as root, because the Wi-Fi passwords and host keys are root-only. The repository isn't encrypted (`--encryption none`), and the server's address isn't in git:
 - `/root/.config/borg/repo`: the repository, one line (`ssh://user@host/path/to/borg`)

@@ -5,7 +5,12 @@
 #
 #   sudo scripts/backup.sh               # make an archive
 #   sudo scripts/backup.sh list          # anything else is passed to borg:
-#   sudo scripts/backup.sh extract ::monty-alarm-2026-10-23T10:00 home/pi/.config/pianobar/config
+#   sudo scripts/backup.sh extract ::monty-alarm-2026-10-23T10:00:00-22a103d home/pi/.config/pianobar/config
+#
+# Archives are named for the time and the commit checked out (plus -dirty if
+# the repo had uncommitted changes). It runs after
+# every commit (scripts/git-hooks/post-commit) and every night at 03:30
+# (services/monty-alarm-backup.timer), as services/monty-alarm-backup.service.
 #
 # It runs as root because the Wi-Fi passwords and SSH host keys are root-only.
 # The repository isn't encrypted (borg init --encryption none). Its address
@@ -50,6 +55,8 @@ systemctl list-unit-files --state=enabled --no-pager > "$MANIFESTS/enabled-units
     sudo -u pi git -C "$REPO_DIR" status -sb | head -1
     sudo -u pi git -C "$REPO_DIR" log --oneline -10
 } > "$MANIFESTS/system.txt"
+COMMIT=$(sudo -u pi git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)
+[ -z "$(sudo -u pi git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ] || COMMIT="$COMMIT-dirty"
 
 # Low priority: the alarm comes first
 nice -n 19 ionice -c 3 borg create --stats --show-rc --compression zstd --exclude-caches \
@@ -59,5 +66,5 @@ nice -n 19 ionice -c 3 borg create --stats --show-rc --compression zstd --exclud
     --exclude "$REPO_DIR/music/from-monty" \
     --exclude "$REPO_DIR/signals" \
     --exclude 'sh:**/__pycache__' \
-    "::monty-alarm-{now:%Y-%m-%dT%H:%M}" \
+    "::monty-alarm-{now:%Y-%m-%dT%H:%M:%S}-$COMMIT" \
     /home/pi /etc /boot/firmware/config.txt /boot/firmware/cmdline.txt "$MANIFESTS"

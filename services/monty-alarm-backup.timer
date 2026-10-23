@@ -1,0 +1,9 @@
+[Unit]
+Description=Monty Alarm nightly backup (catches songs.log and settings that change without a commit)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

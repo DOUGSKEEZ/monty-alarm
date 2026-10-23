@@ -5,11 +5,13 @@
 # What it changes outside the repo:
 #   /etc/asound.conf      <- audio/asound.conf  (old one backed up next to it)
 #   /etc/libao.conf       <- audio/libao.conf   (old one backed up next to it)
-#   /etc/systemd/system/  <- services/*.service
+#   /etc/systemd/system/  <- services/*.service, services/*.timer
+#   /etc/sudoers.d/010_monty-alarm-backup <- services/010_monty-alarm-backup (pi may start a backup)
 #   /etc/udev/rules.d/99-monty-buttons.rules <- firmware/button/99-monty-buttons.rules
 #   PulseAudio masked for all users (undo: systemctl --global unmask pulseaudio.service pulseaudio.socket)
 # alarm-trigger.service runs with the gpio group (SupplementaryGroups) to click the speaker relay.
 #   ~pi/.config/pianobar/ctl  <- a FIFO for pianobar commands (core/pianobar.py), created if missing
+#   git config core.hooksPath scripts/git-hooks  (a backup after every commit; undo: git config --unset core.hooksPath)
 set -e
 cd "$(dirname "$0")/.."
 
@@ -46,10 +48,20 @@ for runtime in /run/user/*; do
 done
 echo "PulseAudio masked"
 
-for unit in services/*.service; do
+for unit in services/*.service services/*.timer; do
     install -m 644 "$unit" /etc/systemd/system/
     echo "Installed /etc/systemd/system/$(basename "$unit")"
 done
+
+# Backups (scripts/backup.sh): after every commit, through the post-commit hook,
+# and nightly. The hook runs as pi, so it may start the backup service with sudo,
+# and nothing else. visudo checks the rule first: a broken file in sudoers.d
+# would stop sudo working at all.
+visudo -cqf services/010_monty-alarm-backup
+install -m 440 services/010_monty-alarm-backup /etc/sudoers.d/010_monty-alarm-backup
+echo "Installed /etc/sudoers.d/010_monty-alarm-backup"
+sudo -u pi git config core.hooksPath scripts/git-hooks
+echo "Turned on the post-commit backup hook"
 
 # pianobar's control FIFO, so the buttons can send it commands (thumbs down)
 sudo -u pi -H python3 core/pianobar.py setup
@@ -64,5 +76,6 @@ done
 systemctl daemon-reload
 systemctl enable monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service
 systemctl restart monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service
+systemctl enable --now monty-alarm-backup.timer
 echo
-systemctl --no-pager --lines=0 status monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service | grep -E "●|Active:"
+systemctl --no-pager --lines=0 status monty-alarm-api.service alarm-trigger.service alarm-buttons.service button-leds.service monty-alarm-backup.timer | grep -E "●|Active:"
